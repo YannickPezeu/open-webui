@@ -2325,3 +2325,55 @@ async def process_chat_response(
             headers=dict(response.headers),
             background=response.background,
         )
+
+
+# Add this to /app/backend/open_webui/utils/middleware.py
+
+from fastapi import Request, HTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+import re
+
+
+class ModelLoadingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        try:
+            # Process the request normally
+            response = await call_next(request)
+            return response
+        except Exception as e:
+            # Check if this is a request to the completions endpoint
+            if "/api/chat/completions" in request.url.path:
+                # Extract the model ID from the request if possible
+                body = await request.json()
+                model_id = body.get("model", "")
+
+                # Check if this is a connection error with specific model types
+                error_str = str(e)
+                is_connection_error = any(term in error_str.lower() for term in [
+                    "timeout", "connection refused", "connection error",
+                    "client connector", "read timeout"
+                ])
+
+                if is_connection_error:
+                    # Customize message based on model type
+                    if "pixtral" in model_id.lower():
+                        return JSONResponse(
+                            status_code=503,
+                            content={
+                                "detail": "The Pixtral model is currently being loaded. This may take approximately 7 minutes. Please try again shortly."
+                            }
+                        )
+                    else:
+                        return JSONResponse(
+                            status_code=503,
+                            content={
+                                "detail": "The model is currently being loaded. Please try again in a few minutes."
+                            }
+                        )
+
+            # Re-raise the exception for other cases
+            raise e
+
+
+

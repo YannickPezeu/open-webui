@@ -957,10 +957,13 @@ class RedirectMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         return response
 
+from open_webui.utils.middleware import ModelLoadingMiddleware
 
 # Add the middleware to the app
 app.add_middleware(RedirectMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(ModelLoadingMiddleware)
+
 
 
 @app.middleware("http")

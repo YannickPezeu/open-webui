@@ -80,12 +80,12 @@ class PgvectorClient(VectorDBBase):
             Base.metadata.create_all(bind=connection)
 
             # Create an index on the vector column if it doesn't exist
-            self.session.execute(
-                text(
-                    "CREATE INDEX IF NOT EXISTS idx_document_chunk_vector "
-                    "ON document_chunk USING ivfflat (vector vector_cosine_ops) WITH (lists = 100);"
-                )
-            )
+            # self.session.execute(
+            #     text(
+            #         "CREATE INDEX IF NOT EXISTS idx_document_chunk_vector "
+            #         "ON document_chunk USING ivfflat (vector vector_cosine_ops) WITH (lists = 100);"
+            #     )
+            # )
             self.session.execute(
                 text(
                     "CREATE INDEX IF NOT EXISTS idx_document_chunk_collection_name "

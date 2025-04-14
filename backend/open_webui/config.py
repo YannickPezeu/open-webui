@@ -1370,14 +1370,14 @@ TAGS_GENERATION_PROMPT_TEMPLATE = PersistentConfig(
 )
 
 DEFAULT_TAGS_GENERATION_PROMPT_TEMPLATE = """### Task:
-Generate 1-3 broad tags categorizing the main themes of the chat history, along with 1-3 more specific subtopic tags.
+Generate 0-3 search queries based on the user message.
 
 ### Guidelines:
-- Start with high-level domains (e.g. Science, Technology, Philosophy, Arts, Politics, Business, Health, Sports, Entertainment, Education)
-- Consider including relevant subfields/subdomains if they are strongly represented throughout the conversation
-- If content is too short (less than 3 messages) or too diverse, use only ["General"]
-- Use the chat's primary language; default to English if multilingual
-- Prioritize accuracy over specificity
+- For simple greetings (hello, hi, good morning, etc.) or conversational pleasantries, generate 0 queries
+- For questions or requests related to EPFL information, generate 1-3 specific search queries
+- Make queries specific and targeted to relevant document sections
+- Each query should focus on a distinct aspect of the user's question
+- Prioritize accuracy over quantity
 
 ### Output:
 JSON format: { "tags": ["tag1", "tag2", "tag3"] }
