@@ -870,7 +870,11 @@ async def generate_chat_completion(
             if "error" in response:
                 detail = f"{response['error']['message'] if 'message' in response['error'] else response['error']}"
         elif isinstance(response, str):
-            detail = response
+            if response.strip().startswith("<html") or response.strip().startswith("<!DOCTYPE html"):
+                # This is likely HTML from a model loading state
+                detail = "Model is currently loading. Please wait a few minutes and try again."
+            else:
+                detail = response
 
         raise HTTPException(
             status_code=r.status if r else 500,
