@@ -18,3 +18,14 @@ uploads
 **/*.db
 _test
 backend/data/*
+
+.git
+*.pyc
+*.log
+*.sqlite
+*.db
+env
+
+# Add this to your .dockerignore file
+backend/venv_py311/
+.git/
