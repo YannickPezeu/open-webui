@@ -19,7 +19,7 @@
 	import { getBanners } from '$lib/apis/configs';
 	import { getUserSettings } from '$lib/apis/users';
 
-	import { WEBUI_VERSION } from '$lib/constants';
+	import {WEBUI_API_BASE_URL, WEBUI_VERSION} from '$lib/constants';
 	import { compareVersion } from '$lib/utils';
 
 	import {
@@ -240,6 +240,10 @@
 			await tick();
 		}
 
+		if ($user && ['user', 'admin'].includes($user?.role)) {
+    await wake_up_models();
+  }
+
 		loaded = true;
 	});
 
@@ -251,6 +255,33 @@
 			};
 		});
 	};
+	const wake_up_models = async () => {
+		try {
+			console.log('Checking if models need to wake up...');
+			const response = await fetch(`${WEBUI_API_BASE_URL}/utils/wake_up_models`, {
+				method: 'GET',
+				headers: {
+					'Authorization': `Bearer ${localStorage.token}`
+				}
+			});
+
+			const result = await response.json();
+			console.log('Wake up models response:', result);
+
+			// Optionally show a toast message based on the status
+			if (result.status === "All models are awake") {
+				// Models successfully woken up
+				console.log('Models are ready for use');
+			} else if (result.status === "Models already awake") {
+				console.log(`Models were woken up ${result.last_wakeup}. Next wake-up in ${result.next_wakeup_in}`);
+        	}
+		} catch (error) {
+			console.error('Error waking up models:', error);
+			// Silently fail - don't alert the user if this fails
+		}
+	}
+
+
 </script>
 
 <SettingsModal bind:show={$showSettings} />

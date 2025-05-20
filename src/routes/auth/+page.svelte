@@ -88,29 +88,73 @@
 		}
 	};
 
-	const checkOauthCallback = async () => {
-		if (!$page.url.hash) {
-			return;
-		}
-		const hash = $page.url.hash.substring(1);
-		if (!hash) {
-			return;
-		}
-		const params = new URLSearchParams(hash);
-		const token = params.get('token');
-		if (!token) {
-			return;
-		}
-		const sessionUser = await getSessionUser(token).catch((error) => {
-			toast.error(`${error}`);
-			return null;
-		});
-		if (!sessionUser) {
-			return;
-		}
-		localStorage.token = token;
-		await setSessionUser(sessionUser);
-	};
+const checkOauthCallback = async () => {
+    console.log('checkOauthCallback', $page.url.hash);
+
+    if (!$page.url.hash) {
+        console.log('No hash found in URL');
+        return;
+    }
+
+    const hash = $page.url.hash.substring(1);
+    console.log('Parsed hash:', hash);
+
+    if (!hash) {
+        console.log('Empty hash after parsing');
+        return;
+    }
+
+    const params = new URLSearchParams(hash);
+    console.log('URL parameters:', Object.fromEntries(params.entries()));
+
+    const token = params.get('token');
+    if (!token) {
+        console.log('No token found in hash parameters');
+        return;
+    }
+
+    console.log('Token found, calling getSessionUser');
+    const sessionUser = await getSessionUser(token).catch((error) => {
+        console.error('getSessionUser error:', error);
+        toast.error(`${error}`);
+        return null;
+    });
+
+    if (!sessionUser) {
+        console.log('No session user returned');
+        return;
+    }
+
+    console.log('Session user retrieved:', sessionUser);
+    localStorage.token = token;
+    await setSessionUser(sessionUser);
+    console.log('Session user set successfully');
+
+    // Wake up the models after successful login
+    try {
+        console.log('Checking if models need to wake up...');
+        const response = await fetch(`${WEBUI_API_BASE_URL}/utils/wake_up_models`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+
+        const result = await response.json();
+        console.log('Wake up models response:', result);
+
+        // Optionally show a toast message based on the status
+        if (result.status === "All models are awake") {
+            // Models successfully woken up
+            console.log('Models are ready for use');
+        } else if (result.status === "Models already awake") {
+            console.log(`Models were woken up ${result.last_wakeup}. Next wake-up in ${result.next_wakeup_in}`);
+        }
+    } catch (error) {
+        console.error('Error waking up models:', error);
+        // Silently fail - don't alert the user if this fails
+    }
+};
 
 	let onboarding = false;
 

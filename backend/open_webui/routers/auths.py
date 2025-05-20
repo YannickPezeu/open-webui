@@ -57,10 +57,14 @@ if ENABLE_LDAP.value:
     from ldap3 import Server, Connection, NONE, Tls
     from ldap3.utils.conv import escape_filter_chars
 
+
+
 router = APIRouter()
 
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MAIN"])
+
+log.info('starting auth router')
 
 ############################
 # GetSessionUser
@@ -110,6 +114,8 @@ async def get_session_user(
     user_permissions = get_permissions(
         user.id, request.app.state.config.USER_PERMISSIONS
     )
+    
+    log.info('user permission:', user_permissions)
 
     return {
         "token": token,
@@ -174,6 +180,7 @@ async def update_password(
 ############################
 @router.post("/ldap", response_model=SessionUserResponse)
 async def ldap_auth(request: Request, response: Response, form_data: LdapForm):
+    log.info(f"LDAP authentication request: {form_data.user}")
     ENABLE_LDAP = request.app.state.config.ENABLE_LDAP
     LDAP_SERVER_LABEL = request.app.state.config.LDAP_SERVER_LABEL
     LDAP_SERVER_HOST = request.app.state.config.LDAP_SERVER_HOST
@@ -359,6 +366,7 @@ async def ldap_auth(request: Request, response: Response, form_data: LdapForm):
 
 @router.post("/signin", response_model=SessionUserResponse)
 async def signin(request: Request, response: Response, form_data: SigninForm):
+    log.info(f"Signin request: {form_data.email}")
     if WEBUI_AUTH_TRUSTED_EMAIL_HEADER:
         if WEBUI_AUTH_TRUSTED_EMAIL_HEADER not in request.headers:
             raise HTTPException(400, detail=ERROR_MESSAGES.INVALID_TRUSTED_HEADER)
