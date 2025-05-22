@@ -137,7 +137,7 @@ async def download_litellm_config_yaml(user=Depends(get_admin_user)):
         filename="config.yaml",
     )
 
-############ My code
+############ My code ############
 
 import json
 import time
@@ -148,7 +148,6 @@ import logging
 from datetime import datetime, timedelta
 from fastapi import APIRouter
 
-router = APIRouter()
 
 api_key = os.getenv("OPENAI_API_KEY")
 API_ENDPOINT = os.getenv("OPENAI_API_BASE_URL", "https://inference-dev.rcp.epfl.ch/v1")
@@ -162,98 +161,325 @@ headers = {
     "Authorization": f"Bearer {api_key}"
 }
 
+from typing import Optional, Dict
+from pydantic import BaseModel
 
-@router.get("/wake_up_models")
-async def wake_up_models(force: bool = False):
+
+# Global dictionary to track last wake-up time per model
+last_wakeup_times: Dict[str, float] = {}
+
+
+# Add this model class for the request body
+class WakeUpModelsRequest(BaseModel):
+    force: Optional[bool] = False
+    embedding_model: Optional[str] = "Linq-AI-Research/Linq-Embed-Mistral"
+    chat_model: Optional[str] = "Qwen/Qwen3-30B-A3B"
+
+
+
+
+
+# Global dictionary to track active wake-up tasks per model
+active_wakeup_tasks: Dict[str, asyncio.Task] = {}
+
+# Lock to prevent race conditions
+wakeup_lock = asyncio.Lock()
+
+
+async def check_model_availability_async(model_id):
     """
-    Wake up models by concurrently sending requests to embedding and chat completion endpoints.
-    Only wakes up models if it's been more than 15 minutes since the last wake-up or if force=True.
+    Check if a model is available in the inference provider by querying the /models endpoint
     """
-    global last_wakeup_time
-    current_time = time.time()
-
-    # Calculate time elapsed since last wake-up
-    elapsed_time = current_time - last_wakeup_time
-
-    # Check if we need to wake up models
-    if not force and last_wakeup_time > 0 and elapsed_time < WAKEUP_INTERVAL:
-        minutes_ago = int(elapsed_time / 60)
-        return {
-            "status": "Models already awake",
-            "last_wakeup": f"{minutes_ago} minutes ago",
-            "next_wakeup_in": f"{int((WAKEUP_INTERVAL - elapsed_time) / 60)} minutes"
-        }
-
-    log.info("Starting model wake-up process...")
-    try:
-        # Run both API calls concurrently
-        embedding_task, chat_task = await asyncio.gather(
-            get_embeddings_async('a'),
-            test_chat_completion_async(),
-            return_exceptions=True  # This prevents one failed task from affecting the other
-        )
-
-        # Check results
-        embedding_success = not isinstance(embedding_task, Exception) and embedding_task and embedding_task.get("data")
-        chat_success = not isinstance(chat_task, Exception) and chat_task
-
-        # Update last wake-up time if at least one model was successfully awakened
-        if embedding_success or chat_success:
-            last_wakeup_time = current_time
-            log.info(
-                f"Updated last_wakeup_time to {datetime.fromtimestamp(current_time).strftime('%Y-%m-%d %H:%M:%S')}")
-
-        if embedding_success and chat_success:
-            log.info("Successfully woke up both embedding and chat models")
-            return {"status": "All models are awake"}
-        elif embedding_success:
-            log.info("Successfully woke up embedding model, but chat model failed")
-            return {"status": "Embedding model is awake, but chat model failed to wake up"}
-        elif chat_success:
-            log.info("Successfully woke up chat model, but embedding model failed")
-            return {"status": "Chat model is awake, but embedding model failed to wake up"}
-        else:
-            log.warning("Failed to wake up both embedding and chat models")
-            return {"status": "Failed to wake up models"}
-
-    except Exception as e:
-        log.error(f"Error waking up models: {str(e)}")
-        return {"status": "Error", "message": str(e)}
-
-
-# Rest of your code (get_embeddings_async, test_chat_completion_async, etc.) remains the same
-
-
-async def get_embeddings_async(text, model="Linq-AI-Research/Linq-Embed-Mistral"):
-    """
-    Asynchronous version of get_embeddings
-    """
-    log.info("Getting embeddings asynchronously...")
-    # Ensure text is a list if it's a single string
-    if isinstance(text, str):
-        text = [text]
-
-    # Prepare request payload
-    payload = {
-        "model": model,
-        "input": text
-    }
+    log.info(f"[AVAILABILITY] Checking availability for model: {model_id}")
 
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.post(
-                    f"{API_ENDPOINT}/embeddings",
+            async with session.get(
+                    f"{API_ENDPOINT}/models",
                     headers=headers,
-                    json=payload,
-                    timeout=180
+                    timeout=30
             ) as response:
                 response.raise_for_status()
-                return await response.json()
+                models_data = await response.json()
 
-        except aiohttp.ClientError as e:
-            print(f"Embedding error: {e}")
-            return None
+                available_models = [model.get('id') for model in models_data.get("data", [])]
+                log.info(f"[AVAILABILITY] Available models: {available_models}")
 
+                is_available = model_id in available_models
+                log.info(f"[AVAILABILITY] Model {model_id} availability: {is_available}")
+
+                return is_available
+
+        except Exception as e:
+            log.error(f"[AVAILABILITY] Error checking model availability for {model_id}: {e}")
+            return True
+
+
+@router.post("/wake_up_models")
+async def wake_up_models(request: WakeUpModelsRequest):
+    """
+    Wake up models by concurrently sending requests to embedding and chat completion endpoints.
+    This endpoint handles concurrent requests properly - multiple users can wake up different models simultaneously.
+    """
+    global last_wakeup_times, active_wakeup_tasks
+    current_time = time.time()
+
+    log.info(
+        f"[WAKE_UP] New wake-up request received - Embedding: {request.embedding_model}, Chat: {request.chat_model}")
+    log.info(f"[WAKE_UP] Current active tasks: {list(active_wakeup_tasks.keys())}")
+    log.info(f"[WAKE_UP] Current asyncio task queue size: {len(asyncio.all_tasks())}")
+
+    # Check if these specific models are already being woken up
+    embedding_task_active = request.embedding_model in active_wakeup_tasks
+    chat_task_active = request.chat_model in active_wakeup_tasks
+
+    if embedding_task_active:
+        log.info(f"[WAKE_UP] Embedding model {request.embedding_model} is already being woken up by another request")
+    if chat_task_active:
+        log.info(f"[WAKE_UP] Chat model {request.chat_model} is already being woken up by another request")
+
+    # First check if models are available in the inference provider
+    log.info(f"[WAKE_UP] Checking model availability...")
+    embedding_available = await check_model_availability_async(request.embedding_model)
+    chat_available = await check_model_availability_async(request.chat_model)
+
+    # If models are not available, consider them as "awake" (skip wake-up)
+    if not embedding_available:
+        log.info(
+            f"[WAKE_UP] Embedding model {request.embedding_model} not available in inference provider, considering as awake")
+
+    if not chat_available:
+        log.info(f"[WAKE_UP] Chat model {request.chat_model} not available in inference provider, considering as awake")
+
+    # Check wake-up status for each available model
+    embedding_needs_wakeup = embedding_available and not embedding_task_active
+    chat_needs_wakeup = chat_available and not chat_task_active
+
+    embedding_last_wakeup = last_wakeup_times.get(request.embedding_model, 0)
+    chat_last_wakeup = last_wakeup_times.get(request.chat_model, 0)
+
+    embedding_elapsed = current_time - embedding_last_wakeup
+    chat_elapsed = current_time - chat_last_wakeup
+
+    # Check if embedding model needs wake-up (only if available and not already being woken up)
+    if embedding_available and not request.force and embedding_last_wakeup > 0 and embedding_elapsed < WAKEUP_INTERVAL:
+        embedding_needs_wakeup = False
+        embedding_minutes_ago = int(embedding_elapsed / 60)
+        embedding_next_wakeup = int((WAKEUP_INTERVAL - embedding_elapsed) / 60)
+        log.info(
+            f"[WAKE_UP] Embedding model {request.embedding_model} was awakened {embedding_minutes_ago} minutes ago, skipping")
+
+    # Check if chat model needs wake-up (only if available and not already being woken up)
+    if chat_available and not request.force and chat_last_wakeup > 0 and chat_elapsed < WAKEUP_INTERVAL:
+        chat_needs_wakeup = False
+        chat_minutes_ago = int(chat_elapsed / 60)
+        chat_next_wakeup = int((WAKEUP_INTERVAL - chat_elapsed) / 60)
+        log.info(f"[WAKE_UP] Chat model {request.chat_model} was awakened {chat_minutes_ago} minutes ago, skipping")
+
+    log.info(f"[WAKE_UP] Wake-up decision - Embedding: {embedding_needs_wakeup}, Chat: {chat_needs_wakeup}")
+
+    # If neither model needs wake-up, return early
+    if not embedding_needs_wakeup and not chat_needs_wakeup:
+        log.info(f"[WAKE_UP] No models need wake-up, returning early")
+        return {
+            "status": "Models already awake",
+            "embedding_model": {
+                "name": request.embedding_model,
+                "last_wakeup": f"{embedding_minutes_ago if embedding_available and not embedding_task_active else 'N/A'} minutes ago" if embedding_available else "N/A (not available)",
+                "next_wakeup_in": f"{embedding_next_wakeup} minutes" if embedding_available and not embedding_task_active else "N/A",
+                "needs_wakeup": False,
+                "success": True,
+                "available": embedding_available,
+                "task_active": embedding_task_active
+            },
+            "chat_model": {
+                "name": request.chat_model,
+                "last_wakeup": f"{chat_minutes_ago if chat_available and not chat_task_active else 'N/A'} minutes ago" if chat_available else "N/A (not available)",
+                "next_wakeup_in": f"{chat_next_wakeup} minutes" if chat_available and not chat_task_active else "N/A",
+                "needs_wakeup": False,
+                "success": True,
+                "available": chat_available,
+                "task_active": chat_task_active
+            }
+        }
+
+    log.info(
+        f"[WAKE_UP] Starting model wake-up process for models - Embedding: {request.embedding_model} (available: {embedding_available}, needs_wakeup: {embedding_needs_wakeup}), Chat: {request.chat_model} (available: {chat_available}, needs_wakeup: {chat_needs_wakeup})")
+
+    try:
+        # Initialize results - models not available are considered successful
+        embedding_success = not embedding_available or not embedding_needs_wakeup
+        chat_success = not chat_available or not chat_needs_wakeup
+
+        # Create list of tasks to run (only for available models that need wake-up)
+        tasks = []
+        task_types = []
+        task_models = []
+
+        if embedding_available and embedding_needs_wakeup:
+            log.info(f"[WAKE_UP] Creating embedding wake-up task for {request.embedding_model}")
+            task = asyncio.create_task(get_embeddings_async('a', model=request.embedding_model))
+            active_wakeup_tasks[request.embedding_model] = task
+            tasks.append(task)
+            task_types.append('embedding')
+            task_models.append(request.embedding_model)
+
+        if chat_available and chat_needs_wakeup:
+            log.info(f"[WAKE_UP] Creating chat wake-up task for {request.chat_model}")
+            task = asyncio.create_task(test_chat_completion_async(model=request.chat_model))
+            active_wakeup_tasks[request.chat_model] = task
+            tasks.append(task)
+            task_types.append('chat')
+            task_models.append(request.chat_model)
+
+        log.info(f"[WAKE_UP] Active tasks after creation: {list(active_wakeup_tasks.keys())}")
+        log.info(f"[WAKE_UP] Total asyncio tasks in event loop: {len(asyncio.all_tasks())}")
+
+        # Only run tasks if there are any to run
+        if tasks:
+            log.info(f"[WAKE_UP] Starting {len(tasks)} concurrent wake-up tasks")
+            start_time = time.time()
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            end_time = time.time()
+            log.info(f"[WAKE_UP] All wake-up tasks completed in {end_time - start_time:.2f} seconds")
+
+            # Clean up active tasks
+            for model in task_models:
+                if model in active_wakeup_tasks:
+                    del active_wakeup_tasks[model]
+                    log.info(f"[WAKE_UP] Removed {model} from active tasks")
+
+            # Process results
+            result_index = 0
+            for i, task_type in enumerate(task_types):
+                result = results[result_index]
+                result_index += 1
+
+                if task_type == 'embedding':
+                    if isinstance(result, Exception):
+                        log.error(f"[WAKE_UP] Embedding task failed: {result}")
+                        embedding_success = False
+                    else:
+                        embedding_success = result and result.get("data") is not None
+                        log.info(f"[WAKE_UP] Embedding task completed successfully: {embedding_success}")
+
+                elif task_type == 'chat':
+                    if isinstance(result, Exception):
+                        log.error(f"[WAKE_UP] Chat task failed: {result}")
+                        chat_success = False
+                    else:
+                        chat_success = bool(result)
+                        log.info(f"[WAKE_UP] Chat task completed successfully: {chat_success}")
+
+        # Update last wake-up times for successfully awakened models
+        if embedding_success and embedding_available and embedding_needs_wakeup:
+            last_wakeup_times[request.embedding_model] = current_time
+            log.info(f"[WAKE_UP] Updated last_wakeup_time for {request.embedding_model}")
+
+        if chat_success and chat_available and chat_needs_wakeup:
+            last_wakeup_times[request.chat_model] = current_time
+            log.info(f"[WAKE_UP] Updated last_wakeup_time for {request.chat_model}")
+
+        log.info(f"[WAKE_UP] Final active tasks: {list(active_wakeup_tasks.keys())}")
+        log.info(f"[WAKE_UP] Request completed - Embedding success: {embedding_success}, Chat success: {chat_success}")
+
+        # Prepare detailed response
+        response = {
+            "embedding_model": {
+                "name": request.embedding_model,
+                "success": embedding_success,
+                "needed_wakeup": embedding_needs_wakeup,
+                "available": embedding_available,
+                "task_was_active": embedding_task_active,
+                "last_wakeup": "0 minutes ago" if embedding_available and embedding_needs_wakeup and embedding_success else (
+                    f"{int(embedding_elapsed / 60)} minutes ago" if embedding_available else "N/A (not available)"),
+                "timestamp": current_time if embedding_available and embedding_needs_wakeup and embedding_success else (
+                    embedding_last_wakeup if embedding_available else None)
+            },
+            "chat_model": {
+                "name": request.chat_model,
+                "success": chat_success,
+                "needed_wakeup": chat_needs_wakeup,
+                "available": chat_available,
+                "task_was_active": chat_task_active,
+                "last_wakeup": "0 minutes ago" if chat_available and chat_needs_wakeup and chat_success else (
+                    f"{int(chat_elapsed / 60)} minutes ago" if chat_available else "N/A (not available)"),
+                "timestamp": current_time if chat_available and chat_needs_wakeup and chat_success else (
+                    chat_last_wakeup if chat_available else None)
+            }
+        }
+
+        # Determine overall status
+        if embedding_success and chat_success:
+            response["status"] = "All models are awake"
+        elif embedding_success:
+            response["status"] = "Embedding model is awake, but chat model failed to wake up"
+        elif chat_success:
+            response["status"] = "Chat model is awake, but embedding model failed to wake up"
+        else:
+            response["status"] = "Failed to wake up models"
+
+        return response
+
+    except Exception as e:
+        log.error(f"[WAKE_UP] Error waking up models: {str(e)}")
+        import traceback
+        log.error(f"[WAKE_UP] Traceback: {traceback.format_exc()}")
+
+        # Clean up active tasks in case of error
+        for model in [request.embedding_model, request.chat_model]:
+            if model in active_wakeup_tasks:
+                del active_wakeup_tasks[model]
+                log.info(f"[WAKE_UP] Cleaned up failed task for {model}")
+
+        return {
+            "status": "Error",
+            "message": str(e),
+            "embedding_model": {
+                "name": request.embedding_model,
+                "success": False,
+                "needed_wakeup": embedding_needs_wakeup,
+                "available": embedding_available
+            },
+            "chat_model": {
+                "name": request.chat_model,
+                "success": False,
+                "needed_wakeup": chat_needs_wakeup,
+                "available": chat_available
+            }
+        }
+
+def check_model_availability_sync(model_id):
+    """
+    Synchronous version to check if a model is available in the inference provider
+
+    Args:
+        model_id (str): The model ID to check for availability
+
+    Returns:
+        bool: True if model is available, False otherwise
+    """
+    log.info(f"Checking availability for model: {model_id}")
+
+    try:
+        response = requests.get(f"{API_ENDPOINT}/models", headers=headers, timeout=30)
+        response.raise_for_status()
+
+        models_data = response.json()
+        available_models = [model.get('id') for model in models_data.get("data", [])]
+        log.info(f"Available models: {available_models}")
+
+        is_available = model_id in available_models
+        log.info(f"Model {model_id} availability: {is_available}")
+
+        return is_available
+
+    except requests.exceptions.RequestException as e:
+        log.error(f"Error checking model availability for {model_id}: {e}")
+        # If we can't check availability, assume model is available to avoid blocking
+        return True
 
 async def test_chat_completion_async(model="Qwen/Qwen3-30B-A3B"):
     """
@@ -285,10 +511,40 @@ async def test_chat_completion_async(model="Qwen/Qwen3-30B-A3B"):
                     return True
                 return False
 
-        except aiohttp.ClientError as e:
-            print(f"Chat completion error: {e}")
+        except Exception as e:  # Changed from aiohttp.ClientError to Exception
+            log.error(f"Chat completion error: {e}")
             return False
 
+
+async def get_embeddings_async(text, model="Linq-AI-Research/Linq-Embed-Mistral"):
+    """
+    Asynchronous version of get_embeddings
+    """
+    log.info("Getting embeddings asynchronously...")
+    # Ensure text is a list if it's a single string
+    if isinstance(text, str):
+        text = [text]
+
+    # Prepare request payload
+    payload = {
+        "model": model,
+        "input": text
+    }
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(
+                    f"{API_ENDPOINT}/embeddings",
+                    headers=headers,
+                    json=payload,
+                    timeout=180
+            ) as response:
+                response.raise_for_status()
+                return await response.json()
+
+        except Exception as e:  # Changed from aiohttp.ClientError to Exception
+            log.error(f"Embedding error: {e}")
+            return None
 
 def get_embeddings(text, model="Linq-AI-Research/Linq-Embed-Mistral"):
     """

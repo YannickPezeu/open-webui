@@ -18,7 +18,8 @@
 		tools,
 		user as _user,
 		showControls,
-		TTSWorker
+		TTSWorker,
+		modelsLoaded
 	} from '$lib/stores';
 
 	import {
@@ -62,6 +63,7 @@
 	export let onChange: Function = () => {};
 	export let createMessagePair: Function;
 	export let stopResponse: Function;
+	import Spinner from '../common/Spinner.svelte'; // Make sure this import is correct
 
 	export let autoScroll = false;
 
@@ -85,6 +87,139 @@
 	export let imageGenerationEnabled = false;
 	export let webSearchEnabled = false;
 	export let codeInterpreterEnabled = false;
+
+
+	// Add helper functions
+	const resolveActualModelId = (modelId) => {
+	  const model = $models.find(m => m.id === modelId);
+	  if (!model) return modelId;
+
+	  // If it's a level 1 model (has base_model_id), return the base model
+	  if (model.info?.base_model_id) {
+		return model.info.base_model_id;
+	  }
+
+	  // If it's a level 0 model, return the original ID
+	  return model.id;
+	};
+
+	const setModelLoaded = (modelId, loaded) => {
+	  modelsLoaded.update(current => ({
+		...current,
+		[modelId]: loaded
+	  }));
+	};
+
+	const isModelLoaded = (modelId) => {
+	  const actualModelId = resolveActualModelId(modelId);
+	  return $modelsLoaded[actualModelId] ?? false;
+	};
+
+
+	const wakeUpSelectedModel = async (modelId) => {
+	  if (!modelId || !$models.length) return;
+
+	  try {
+		const actualModelId = resolveActualModelId(modelId);
+
+		// Check if this model is already loaded
+		if ($modelsLoaded[actualModelId]) {
+		  console.log(`Model ${actualModelId} is already loaded`);
+		  return;
+		}
+
+		console.log(`Waking up model: ${modelId} -> actual: ${actualModelId}`);
+
+		// Set model as loading
+		setModelLoaded(actualModelId, false);
+
+		const response = await fetch(`${WEBUI_API_BASE_URL}/utils/wake_up_models`, {
+		  method: 'POST',
+		  headers: {
+			'Authorization': `Bearer ${localStorage.token}`,
+			'Content-Type': 'application/json'
+		  },
+		  body: JSON.stringify({
+			chat_model: actualModelId,
+			force: false
+		  })
+		});
+
+		const result = await response.json();
+		console.log('Model wake up response:', result);
+
+		// Update the loading state based on the response
+		const chatModelSuccess = result.chat_model?.success ?? false;
+		setModelLoaded(actualModelId, chatModelSuccess);
+
+		// Show toast notification
+		if (chatModelSuccess) {
+		  toast.success($i18n.t('Model {{modelName}} is ready', { modelName: modelId }));
+		} else {
+		  toast.error($i18n.t('Failed to load model {{modelName}}', { modelName: modelId }));
+		  console.log(`Failed to wake up model ${actualModelId}, will retry`);
+		  // Retry after a delay
+		  setTimeout(() => wakeUpSelectedModel(modelId), 30000);
+		}
+	  } catch (error) {
+		console.error('Error waking up selected model:', error);
+		// Don't block UI on error
+		const actualModelId = resolveActualModelId(modelId);
+		setModelLoaded(actualModelId, true);
+		toast.error($i18n.t('Error loading model {{modelName}}', { modelName: modelId }));
+	  }
+	};
+
+// Add debug reactive statement to track model loading changes
+	$: {
+	  console.log('Current modelsLoaded state:', $modelsLoaded);
+	  console.log('Selected models:', selectedModels);
+	  console.log('At selected model:', atSelectedModel?.id);
+	  console.log('Are selected models loaded:', areSelectedModelsLoaded());
+	}
+
+// Update the areSelectedModelsLoaded function to be more robust
+	const areSelectedModelsLoaded = () => {
+	  if (atSelectedModel) {
+		const actualModelId = resolveActualModelId(atSelectedModel.id);
+		const isLoaded = $modelsLoaded[actualModelId] ?? false;
+		console.log(`Checking atSelectedModel ${atSelectedModel.id} -> ${actualModelId}: ${isLoaded}`);
+		return isLoaded;
+	  }
+
+	  if (selectedModels.length === 0) {
+		console.log('No models selected');
+		return false;
+	  }
+
+	  const allLoaded = selectedModels.every(modelId => {
+		const actualModelId = resolveActualModelId(modelId);
+		const isLoaded = $modelsLoaded[actualModelId] ?? false;
+		console.log(`Checking selectedModel ${modelId} -> ${actualModelId}: ${isLoaded}`);
+		return isLoaded;
+	  });
+
+	  console.log('All selected models loaded:', allLoaded);
+	  return allLoaded;
+	};
+	// Add reactive statements to wake up models when selection changes
+	$: if (selectedModels.length > 0 && $models.length > 0) {
+	  selectedModels.forEach(modelId => {
+		if (!isModelLoaded(modelId)) {
+		  wakeUpSelectedModel(modelId);
+		}
+	  });
+	}
+
+	$: if (atSelectedModel && $models.length > 0) {
+	  if (!isModelLoaded(atSelectedModel.id)) {
+		wakeUpSelectedModel(atSelectedModel.id);
+	  }
+	}
+
+	// Add debug logging
+	$: console.log('Models loaded state:', $modelsLoaded);
+	$: console.log('Selected models loaded:', areSelectedModelsLoaded());
 
 	$: onChange({
 		prompt,
@@ -795,11 +930,16 @@
 																	? (e.key === 'Enter' || e.keyCode === 13) && isCtrlPressed
 																	: (e.key === 'Enter' || e.keyCode === 13) && !e.shiftKey;
 
+															// In the keydown handlers, update the condition:
 															if (enterPressed) {
-																e.preventDefault();
-																if (prompt !== '' || files.length > 0) {
-																	dispatch('submit', prompt);
-																}
+															  e.preventDefault();
+															  if ((prompt !== '' || files.length > 0) && areSelectedModelsLoaded() && (selectedModels.length > 0 || atSelectedModel)) {
+																dispatch('submit', prompt);
+															  } else if ((prompt !== '' || files.length > 0) && !areSelectedModelsLoaded()) {
+																toast.info($i18n.t('Models are still loading, please wait...'));
+															  } else if ((prompt !== '' || files.length > 0) && selectedModels.length === 0 && !atSelectedModel) {
+																toast.error($i18n.t('Please select a model first.'));
+															  }
 															}
 														}
 													}
@@ -1427,27 +1567,38 @@
 										{:else}
 											<div class=" flex items-center">
 												<Tooltip content={$i18n.t('Send message')}>
-													<button
-														id="send-message-button"
-														class="{!(prompt === '' && files.length === 0)
+													<!-- Update the conditional rendering to force reactivity -->
+													{#key $modelsLoaded}
+													  {#if !areSelectedModelsLoaded() || (selectedModels.length === 0 && !atSelectedModel)}
+														<!-- Show spinner when models are not loaded or no model selected -->
+														<div class="bg-gray-200 dark:bg-gray-700 transition rounded-full p-1.5 self-center">
+														  <Spinner className="size-6" />
+														</div>
+													  {:else}
+														<!-- Show send button when models are loaded and selected -->
+														<button
+														  id="send-message-button"
+														  class="{!(prompt === '' && files.length === 0)
 															? 'bg-black text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100 '
 															: 'text-white bg-gray-200 dark:text-gray-900 dark:bg-gray-700 disabled'} transition rounded-full p-1.5 self-center"
-														type="submit"
-														disabled={prompt === '' && files.length === 0}
-													>
-														<svg
+														  type="submit"
+														  disabled={prompt === '' && files.length === 0}
+														>
+														  <svg
 															xmlns="http://www.w3.org/2000/svg"
 															viewBox="0 0 16 16"
 															fill="currentColor"
 															class="size-5"
-														>
+														  >
 															<path
-																fill-rule="evenodd"
-																d="M8 14a.75.75 0 0 1-.75-.75V4.56L4.03 7.78a.75.75 0 0 1-1.06-1.06l4.5-4.5a.75.75 0 0 1 1.06 0l4.5 4.5a.75.75 0 0 1-1.06 1.06L8.75 4.56v8.69A.75.75 0 0 1 8 14Z"
-																clip-rule="evenodd"
+															  fill-rule="evenodd"
+															  d="M8 14a.75.75 0 0 1-.75-.75V4.56L4.03 7.78a.75.75 0 0 1-1.06-1.06l4.5-4.5a.75.75 0 0 1 1.06 0l4.5 4.5a.75.75 0 0 1-1.06 1.06L8.75 4.56v8.69A.75.75 0 0 1 8 14Z"
+															  clip-rule="evenodd"
 															/>
-														</svg>
-													</button>
+														  </svg>
+														</button>
+													  {/if}
+													{/key}
 												</Tooltip>
 											</div>
 										{/if}

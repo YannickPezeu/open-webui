@@ -36,7 +36,7 @@
 		chatTitle,
 		showArtifacts,
 		tools,
-		toolServers
+		toolServers,
 	} from '$lib/stores';
 	import {
 		convertMessagesToHistory,
@@ -89,7 +89,9 @@
 	import NotificationToast from '../NotificationToast.svelte';
 	import Spinner from '../common/Spinner.svelte';
 
+
 	export let chatIdProp = '';
+
 
 	let loading = true;
 
@@ -139,6 +141,8 @@
 	let chatFiles = [];
 	let files = [];
 	let params = {};
+
+	$: console.log("selectedModels", selectedModels)
 
 	$: if (chatIdProp) {
 		(async () => {
@@ -1528,6 +1532,8 @@
 	};
 
 	const sendPromptSocket = async (_history, model, responseMessageId, _chatId) => {
+
+		console.log('sending to model', model, 'with id', model.id)
 		const chatMessages = createMessagesList(history, history.currentId);
 		const responseMessage = _history.messages[responseMessageId];
 		const userMessage = _history.messages[responseMessage.parentId];
@@ -2097,6 +2103,7 @@
 								transparentBackground={$settings?.backgroundImageUrl ?? false}
 								{stopResponse}
 								{createMessagePair}
+
 								onChange={(input) => {
 									if (input.prompt !== null) {
 										localStorage.setItem(
