@@ -1,371 +1,336 @@
 <script lang="ts">
-	import { toast } from 'svelte-sonner';
-	import { onMount, tick, getContext } from 'svelte';
-	import { openDB, deleteDB } from 'idb';
-	import fileSaver from 'file-saver';
-	const { saveAs } = fileSaver;
-	import mermaid from 'mermaid';
+    import { toast } from 'svelte-sonner';
+    import { onMount, tick, getContext } from 'svelte';
+    import { openDB, deleteDB } from 'idb';
+    import fileSaver from 'file-saver';
+    const { saveAs } = fileSaver;
+    import mermaid from 'mermaid';
 
-	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
-	import { fade } from 'svelte/transition';
+    import { goto } from '$app/navigation';
+    import { page } from '$app/stores';
+    import { fade } from 'svelte/transition';
 
-	import { getKnowledgeBases } from '$lib/apis/knowledge';
-	import { getFunctions } from '$lib/apis/functions';
-	import { getModels, getToolServersData, getVersionUpdates } from '$lib/apis';
-	import { getAllTags } from '$lib/apis/chats';
-	import { getPrompts } from '$lib/apis/prompts';
-	import { getTools } from '$lib/apis/tools';
-	import { getBanners } from '$lib/apis/configs';
-	import { getUserSettings } from '$lib/apis/users';
-
-	import {WEBUI_API_BASE_URL, WEBUI_VERSION} from '$lib/constants';
-	import { compareVersion } from '$lib/utils';
-
-	import {
-		config,
-		user,
-		settings,
-		models,
-		prompts,
-		knowledge,
-		tools,
-		functions,
-		tags,
-		banners,
-		showSettings,
-		showChangelog,
-		temporaryChatEnabled,
-		toolServers,
-		showSearch,
-		modelsLoaded
-	} from '$lib/stores';
-
-	import Sidebar from '$lib/components/layout/Sidebar.svelte';
-	import SettingsModal from '$lib/components/chat/SettingsModal.svelte';
-	import ChangelogModal from '$lib/components/ChangelogModal.svelte';
-	import AccountPending from '$lib/components/layout/Overlay/AccountPending.svelte';
-	import UpdateInfoToast from '$lib/components/layout/UpdateInfoToast.svelte';
-	import { get } from 'svelte/store';
-	import Spinner from '$lib/components/common/Spinner.svelte';
-
-	const i18n = getContext('i18n');
-
-	let loaded = false;
-	let DB = null;
-	let localDBChats = [];
-
-	let version;
+    // CHANGE 1: Import the new model-specific function instead of the old one.
+    import {
+       setModelLoaded,
+       resolveActualModelId,
+       ensureModelsAwakeSSE,
+       updateLastInteractionTime
+    } from '$lib/utils/modelWakeup';
 
 
-	onMount(async () => {
-		if ($user === undefined || $user === null) {
-			await goto('/auth');
-		} else if (['user', 'admin'].includes($user?.role)) {
-			try {
-				// Check if IndexedDB exists
-				DB = await openDB('Chats', 1);
+    import { getKnowledgeBases } from '$lib/apis/knowledge';
+    import { getFunctions } from '$lib/apis/functions';
+    import { getModels, getToolServersData, getVersionUpdates } from '$lib/apis';
+    import { getAllTags } from '$lib/apis/chats';
+    import { getPrompts } from '$lib/apis/prompts';
+    import { getTools } from '$lib/apis/tools';
+    import { getBanners } from '$lib/apis/configs';
+    import { getUserSettings } from '$lib/apis/users';
 
-				if (DB) {
-					const chats = await DB.getAllFromIndex('chats', 'timestamp');
-					localDBChats = chats.map((item, idx) => chats[chats.length - 1 - idx]);
+    import {WEBUI_API_BASE_URL, WEBUI_VERSION} from '$lib/constants';
+    import { compareVersion } from '$lib/utils';
 
-					if (localDBChats.length === 0) {
-						await deleteDB('Chats');
-					}
-				}
+    import {
+       config,
+       user,
+       settings,
+       models,
+       prompts,
+       knowledge,
+       tools,
+       functions,
+       tags,
+       banners,
+       showSettings,
+       showChangelog,
+       temporaryChatEnabled,
+       toolServers,
+       showSearch,
+       modelsLoaded
+    } from '$lib/stores';
 
-				console.log(DB);
-			} catch (error) {
-				// IndexedDB Not Found
-			}
+    import Sidebar from '$lib/components/layout/Sidebar.svelte';
+    import SettingsModal from '$lib/components/chat/SettingsModal.svelte';
+    import ChangelogModal from '$lib/components/ChangelogModal.svelte';
+    import AccountPending from '$lib/components/layout/Overlay/AccountPending.svelte';
+    import UpdateInfoToast from '$lib/components/layout/UpdateInfoToast.svelte';
+    import { get } from 'svelte/store';
+    import Spinner from '$lib/components/common/Spinner.svelte';
 
-			const chatInputKeys = Object.keys(localStorage).filter((key) =>
-				key.startsWith('chat-input-')
-			);
-			if (chatInputKeys.length > 0) {
-				chatInputKeys.forEach((key) => {
-					localStorage.removeItem(key);
-				});
-			}
+    const i18n = getContext('i18n');
 
-			const userSettings = await getUserSettings(localStorage.token).catch((error) => {
-				console.error(error);
-				return null;
-			});
+    let loaded = false;
+    let DB = null;
+    let localDBChats = [];
 
-			if (userSettings) {
-				settings.set(userSettings.ui);
-			} else {
-				let localStorageSettings = {} as Parameters<(typeof settings)['set']>[0];
-
-				try {
-					localStorageSettings = JSON.parse(localStorage.getItem('settings') ?? '{}');
-				} catch (e: unknown) {
-					console.error('Failed to parse settings from localStorage', e);
-				}
-
-				settings.set(localStorageSettings);
-			}
-
-			models.set(
-				await getModels(
-					localStorage.token,
-					$config?.features?.enable_direct_connections && ($settings?.directConnections ?? null)
-				)
-			);
-
-			banners.set(await getBanners(localStorage.token));
-			tools.set(await getTools(localStorage.token));
-			toolServers.set(await getToolServersData($i18n, $settings?.toolServers ?? []));
-
-			document.addEventListener('keydown', async function (event) {
-				const isCtrlPressed = event.ctrlKey || event.metaKey; // metaKey is for Cmd key on Mac
-				// Check if the Shift key is pressed
-				const isShiftPressed = event.shiftKey;
-
-				// Check if Ctrl  + K is pressed
-				if (isCtrlPressed && event.key.toLowerCase() === 'k') {
-					event.preventDefault();
-					console.log('search');
-					showSearch.set(!$showSearch);
-				}
-
-				// Check if Ctrl + Shift + O is pressed
-				if (isCtrlPressed && isShiftPressed && event.key.toLowerCase() === 'o') {
-					event.preventDefault();
-					console.log('newChat');
-					document.getElementById('sidebar-new-chat-button')?.click();
-				}
-
-				// Check if Shift + Esc is pressed
-				if (isShiftPressed && event.key === 'Escape') {
-					event.preventDefault();
-					console.log('focusInput');
-					document.getElementById('chat-input')?.focus();
-				}
-
-				// Check if Ctrl + Shift + ; is pressed
-				if (isCtrlPressed && isShiftPressed && event.key === ';') {
-					event.preventDefault();
-					console.log('copyLastCodeBlock');
-					const button = [...document.getElementsByClassName('copy-code-button')]?.at(-1);
-					button?.click();
-				}
-
-				// Check if Ctrl + Shift + C is pressed
-				if (isCtrlPressed && isShiftPressed && event.key.toLowerCase() === 'c') {
-					event.preventDefault();
-					console.log('copyLastResponse');
-					const button = [...document.getElementsByClassName('copy-response-button')]?.at(-1);
-					console.log(button);
-					button?.click();
-				}
-
-				// Check if Ctrl + Shift + S is pressed
-				if (isCtrlPressed && isShiftPressed && event.key.toLowerCase() === 's') {
-					event.preventDefault();
-					console.log('toggleSidebar');
-					document.getElementById('sidebar-toggle-button')?.click();
-				}
-
-				// Check if Ctrl + Shift + Backspace is pressed
-				if (
-					isCtrlPressed &&
-					isShiftPressed &&
-					(event.key === 'Backspace' || event.key === 'Delete')
-				) {
-					event.preventDefault();
-					console.log('deleteChat');
-					document.getElementById('delete-chat-button')?.click();
-				}
-
-				// Check if Ctrl + . is pressed
-				if (isCtrlPressed && event.key === '.') {
-					event.preventDefault();
-					console.log('openSettings');
-					showSettings.set(!$showSettings);
-				}
-
-				// Check if Ctrl + / is pressed
-				if (isCtrlPressed && event.key === '/') {
-					event.preventDefault();
-					console.log('showShortcuts');
-					document.getElementById('show-shortcuts-button')?.click();
-				}
-
-				// Check if Ctrl + Shift + ' is pressed
-				if (
-					isCtrlPressed &&
-					isShiftPressed &&
-					(event.key.toLowerCase() === `'` || event.key.toLowerCase() === `"`)
-				) {
-					event.preventDefault();
-					console.log('temporaryChat');
-					temporaryChatEnabled.set(!$temporaryChatEnabled);
-					await goto('/');
-					const newChatButton = document.getElementById('new-chat-button');
-					setTimeout(() => {
-						newChatButton?.click();
-					}, 0);
-				}
-			});
-
-			if ($user?.role === 'admin' && ($settings?.showChangelog ?? true)) {
-				showChangelog.set($settings?.version !== $config.version);
-			}
-
-			if ($user?.role === 'admin' || ($user?.permissions?.chat?.temporary ?? true)) {
-				if ($page.url.searchParams.get('temporary-chat') === 'true') {
-					temporaryChatEnabled.set(true);
-				}
-
-				if ($user?.permissions?.chat?.temporary_enforced) {
-					temporaryChatEnabled.set(true);
-				}
-			}
-
-			// Check for version updates
-			if ($user?.role === 'admin') {
-				// Check if the user has dismissed the update toast in the last 24 hours
-				if (localStorage.dismissedUpdateToast) {
-					const dismissedUpdateToast = new Date(Number(localStorage.dismissedUpdateToast));
-					const now = new Date();
-
-					if (now - dismissedUpdateToast > 24 * 60 * 60 * 1000) {
-						checkForVersionUpdates();
-					}
-				} else {
-					checkForVersionUpdates();
-				}
-			}
-			await tick();
-		}
-
-		if ($user && ['user', 'admin'].includes($user?.role)) {
-		  // Set the default model as not loaded initially
-		  const defaultModel = "Qwen/Qwen3-30B-A3B";
-		  modelsLoaded.update(current => ({
-			...current,
-			[defaultModel]: false
-		  }));
-
-		  // Wake up only the default model
-		  wake_up_models(defaultModel);
-		}
-
-		loaded = true;
-	});
-
-	const checkForVersionUpdates = async () => {
-		version = await getVersionUpdates(localStorage.token).catch((error) => {
-			return {
-				current: WEBUI_VERSION,
-				latest: WEBUI_VERSION
-			};
-		});
-	};
-// Add this helper function to resolve the actual model ID
-const resolveActualModelId = (modelId, models) => {
-  const model = models.find(m => m.id === modelId);
-  if (!model) return modelId;
-
-  // If it's a level 1 model (has base_model_id), return the base model
-  if (model.info?.base_model_id) {
-    return model.info.base_model_id;
-  }
-
-  // If it's a level 0 model, return the original ID
-  return model.id;
-};
-
-// Add helper functions to manage model loading state
-const setModelLoaded = (modelId, loaded) => {
-  modelsLoaded.update(current => ({
-    ...current,
-    [modelId]: loaded
-  }));
-};
+    let version;
 
 
+    onMount(async () => {
+       if ($user === undefined || $user === null) {
+          await goto('/auth');
+       } else if (['user', 'admin'].includes($user?.role)) {
+          try {
+             // Check if IndexedDB exists
+             DB = await openDB('Chats', 1);
 
-// Update the wake_up_models function to include toast notification
-const wake_up_models = async (specificModel = null) => {
-  try {
-    console.log('Checking if models need to wake up...');
+             if (DB) {
+                const chats = await DB.getAllFromIndex('chats', 'timestamp');
+                localDBChats = chats.map((item, idx) => chats[chats.length - 1 - idx]);
 
-    // Use the specific model if provided, otherwise try to get from session
-    let chatModel = specificModel || "Qwen/Qwen3-30B-A3B"; // Default fallback
+                if (localDBChats.length === 0) {
+                   await deleteDB('Chats');
+                }
+             }
 
-    if (!specificModel) {
-      // Try to get the selected model from sessionStorage or other state
-      try {
-        const selectedModelsFromSession = JSON.parse(sessionStorage.getItem('selectedModels') || '[]');
-        if (selectedModelsFromSession.length > 0 && $models.length > 0) {
-          const actualModelId = resolveActualModelId(selectedModelsFromSession[0], $models);
-          chatModel = actualModelId;
-          console.log(`Using selected model: ${selectedModelsFromSession[0]} -> actual: ${actualModelId}`);
-        }
-      } catch (e) {
-        console.log('Could not get selected model from session, using default');
-      }
-    }
+             console.log(DB);
+          } catch (error) {
+             // IndexedDB Not Found
+          }
 
-    console.log(`Waking up model: ${chatModel}`);
+          const chatInputKeys = Object.keys(localStorage).filter((key) =>
+                key.startsWith('chat-input-')
+          );
+          if (chatInputKeys.length > 0) {
+             chatInputKeys.forEach((key) => {
+                localStorage.removeItem(key);
+             });
+          }
 
-    // Set the specific model as loading
-    setModelLoaded(chatModel, false);
+          const userSettings = await getUserSettings(localStorage.token).catch((error) => {
+             console.error(error);
+             return null;
+          });
 
-    const response = await fetch(`${WEBUI_API_BASE_URL}/utils/wake_up_models`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${localStorage.token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        chat_model: chatModel,
-        force: false
-      })
+          if (userSettings) {
+             settings.set(userSettings.ui);
+          } else {
+             let localStorageSettings = {} as Parameters<(typeof settings)['set']>[0];
+
+             try {
+                localStorageSettings = JSON.parse(localStorage.getItem('settings') ?? '{}');
+             } catch (e: unknown) {
+                console.error('Failed to parse settings from localStorage', e);
+             }
+
+             settings.set(localStorageSettings);
+          }
+
+          models.set(
+                await getModels(
+                      localStorage.token,
+                      $config?.features?.enable_direct_connections && ($settings?.directConnections ?? null)
+                )
+          );
+
+          banners.set(await getBanners(localStorage.token));
+          tools.set(await getTools(localStorage.token));
+          toolServers.set(await getToolServersData($i18n, $settings?.toolServers ?? []));
+
+          document.addEventListener('keydown', async function (event) {
+             const isCtrlPressed = event.ctrlKey || event.metaKey; // metaKey is for Cmd key on Mac
+             // Check if the Shift key is pressed
+             const isShiftPressed = event.shiftKey;
+
+             // Check if Ctrl  + K is pressed
+             if (isCtrlPressed && event.key.toLowerCase() === 'k') {
+                event.preventDefault();
+                console.log('search');
+                showSearch.set(!$showSearch);
+             }
+
+             // Check if Ctrl + Shift + O is pressed
+             if (isCtrlPressed && isShiftPressed && event.key.toLowerCase() === 'o') {
+                event.preventDefault();
+                console.log('newChat');
+                document.getElementById('sidebar-new-chat-button')?.click();
+             }
+
+             // Check if Shift + Esc is pressed
+             if (isShiftPressed && event.key === 'Escape') {
+                event.preventDefault();
+                console.log('focusInput');
+                document.getElementById('chat-input')?.focus();
+             }
+
+             // Check if Ctrl + Shift + ; is pressed
+             if (isCtrlPressed && isShiftPressed && event.key === ';') {
+                event.preventDefault();
+                console.log('copyLastCodeBlock');
+                const button = [...document.getElementsByClassName('copy-code-button')]?.at(-1);
+                button?.click();
+             }
+
+             // Check if Ctrl + Shift + C is pressed
+             if (isCtrlPressed && isShiftPressed && event.key.toLowerCase() === 'c') {
+                event.preventDefault();
+                console.log('copyLastResponse');
+                const button = [...document.getElementsByClassName('copy-response-button')]?.at(-1);
+                console.log(button);
+                button?.click();
+             }
+
+             // Check if Ctrl + Shift + S is pressed
+             if (isCtrlPressed && isShiftPressed && event.key.toLowerCase() === 's') {
+                event.preventDefault();
+                console.log('toggleSidebar');
+                document.getElementById('sidebar-toggle-button')?.click();
+             }
+
+             // Check if Ctrl + Shift + Backspace is pressed
+             if (
+                   isCtrlPressed &&
+                   isShiftPressed &&
+                   (event.key === 'Backspace' || event.key === 'Delete')
+             ) {
+                event.preventDefault();
+                console.log('deleteChat');
+                document.getElementById('delete-chat-button')?.click();
+             }
+
+             // Check if Ctrl + . is pressed
+             if (isCtrlPressed && event.key === '.') {
+                event.preventDefault();
+                console.log('openSettings');
+                showSettings.set(!$showSettings);
+             }
+
+             // Check if Ctrl + / is pressed
+             if (isCtrlPressed && event.key === '/') {
+                event.preventDefault();
+                console.log('showShortcuts');
+                document.getElementById('show-shortcuts-button')?.click();
+             }
+
+             // Check if Ctrl + Shift + ' is pressed
+             if (
+                   isCtrlPressed &&
+                   isShiftPressed &&
+                   (event.key.toLowerCase() === `'` || event.key.toLowerCase() === `"`)
+             ) {
+                event.preventDefault();
+                console.log('temporaryChat');
+                temporaryChatEnabled.set(!$temporaryChatEnabled);
+                await goto('/');
+                const newChatButton = document.getElementById('new-chat-button');
+                setTimeout(() => {
+                   newChatButton?.click();
+                }, 0);
+             }
+          });
+
+          if ($user?.role === 'admin' && ($settings?.showChangelog ?? true)) {
+             showChangelog.set($settings?.version !== $config.version);
+          }
+
+          if ($user?.role === 'admin' || ($user?.permissions?.chat?.temporary ?? true)) {
+             if ($page.url.searchParams.get('temporary-chat') === 'true') {
+                temporaryChatEnabled.set(true);
+             }
+
+             if ($user?.permissions?.chat?.temporary_enforced) {
+                temporaryChatEnabled.set(true);
+             }
+          }
+
+          // Check for version updates
+          if ($user?.role === 'admin') {
+             // Check if the user has dismissed the update toast in the last 24 hours
+             if (localStorage.dismissedUpdateToast) {
+                const dismissedUpdateToast = new Date(Number(localStorage.dismissedUpdateToast));
+                const now = new Date();
+
+                if (now - dismissedUpdateToast > 24 * 60 * 60 * 1000) {
+                   checkForVersionUpdates();
+                }
+             } else {
+                checkForVersionUpdates();
+             }
+          }
+          await tick();
+       }
+
+       loaded = true;
+
+       if ($user && ['user', 'admin'].includes($user?.role)) {
+          setTimeout(() => {
+             if ($models.length > 0) {
+                initializeDefaultModel();
+             } else {
+                let modelsSubscriptionCleanup: (() => void) | null = null;
+
+                modelsSubscriptionCleanup = models.subscribe(async (modelsList) => {
+                   if (modelsList.length > 0 && !defaultModelInitialized) {
+                      await initializeDefaultModel();
+                      if (modelsSubscriptionCleanup) {
+                         modelsSubscriptionCleanup();
+                         modelsSubscriptionCleanup = null;
+                      }
+                   }
+                });
+             }
+          }, 100);
+       }
     });
 
-    const result = await response.json();
-    console.log('Wake up models response:', result);
-
-    // Update loading state for each model based on response
-    const chatModelSuccess = result.chat_model?.success ?? false;
-    const embeddingModelSuccess = result.embedding_model?.success ?? false;
-
-    // Update the loading state for the chat model
-    setModelLoaded(result.chat_model?.name || chatModel, chatModelSuccess);
-
-    // Update the loading state for the embedding model
-    if (result.embedding_model?.name) {
-      setModelLoaded(result.embedding_model.name, embeddingModelSuccess);
-    }
-
-    console.log('Models loading state updated:', get(modelsLoaded));
-
-    // Show toast notification for chat model
-    if (chatModelSuccess) {
-      if (result.chat_model?.needed_wakeup) {
-        toast.success($i18n.t('Default model is ready'));
-      }
-    } else {
-      toast.error($i18n.t('Failed to load default model'));
-      console.log('Chat model failed to wake up, will retry in 30 seconds');
-      setTimeout(() => wake_up_models(chatModel), 30000);
-    }
-
-  } catch (error) {
-    console.error('Error waking up models:', error);
-    // If there's an error, assume the model is ready to avoid blocking the UI indefinitely
-    const modelToSet = specificModel || chatModel;
-    setModelLoaded(modelToSet, true);
-    toast.error($i18n.t('Error loading models'));
-  }
-}
 
 
+    const checkForVersionUpdates = async () => {
+        version = await getVersionUpdates(localStorage.token).catch((error) => {
+           return {
+              current: WEBUI_VERSION,
+              latest: WEBUI_VERSION
+           };
+        });
+    };
+
+    let defaultModelInitialized = false;
+
+    const initializeDefaultModel = async () => {
+        if (defaultModelInitialized) {
+           console.log('Default model already initialized, skipping');
+           return;
+        }
+
+        if ($user && ['user', 'admin'].includes($user?.role) && $models.length > 0) {
+           const defaultModel = "Qwen/Qwen3-30B-A3B";
+           const actualModelId = resolveActualModelId(defaultModel, $models);
+
+           if ($modelsLoaded[actualModelId] === true) {
+              console.log(`Default model ${defaultModel} is already loaded`);
+              defaultModelInitialized = true;
+              return;
+           }
+
+           defaultModelInitialized = true;
+
+           setModelLoaded(actualModelId, false);
+
+           console.log('Initializing default model:', defaultModel);
+
+           try {
+              const success = await ensureModelsAwakeSSE(defaultModel, $models, $i18n, {
+                 quiet: true,
+                 skipTimeCheck: true
+              });
+
+              if (success) {
+                 console.log(`Default model ${defaultModel} initialization succeeded`);
+
+                 // CHANGE 2: Call the new model-specific function with the correct parameters.
+                 updateLastInteractionTime(defaultModel, $models);
+
+              } else {
+                 console.log(`Default model ${defaultModel} initialization failed`);
+                 defaultModelInitialized = false;
+              }
+           } catch (error) {
+              console.error('Error initializing default model:', error);
+              defaultModelInitialized = false;
+           }
+        }
+    };
 </script>
 
 <SettingsModal bind:show={$showSettings} />

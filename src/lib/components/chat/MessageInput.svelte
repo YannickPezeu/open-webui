@@ -23,6 +23,19 @@
 	} from '$lib/stores';
 
 	import {
+		wakeUpModel,
+		areSelectedModelsLoaded,
+		cleanupModelsLoaded,
+		resolveActualModelId,
+		setModelLoaded,
+		isModelLoaded,
+		shouldWakeUpModel,
+		ensureModelsAwakeSSE,
+		needsModelCheck,
+		updateLastInteractionTime
+	} from '$lib/utils/modelWakeup';
+
+	import {
 		blobToFile,
 		compressImage,
 		createMessagesList,
@@ -89,137 +102,126 @@
 	export let codeInterpreterEnabled = false;
 
 
-	// Add helper functions
-	const resolveActualModelId = (modelId) => {
-	  const model = $models.find(m => m.id === modelId);
-	  if (!model) return modelId;
-
-	  // If it's a level 1 model (has base_model_id), return the base model
-	  if (model.info?.base_model_id) {
-		return model.info.base_model_id;
-	  }
-
-	  // If it's a level 0 model, return the original ID
-	  return model.id;
-	};
-
-	const setModelLoaded = (modelId, loaded) => {
-	  modelsLoaded.update(current => ({
-		...current,
-		[modelId]: loaded
-	  }));
-	};
-
-	const isModelLoaded = (modelId) => {
-	  const actualModelId = resolveActualModelId(modelId);
-	  return $modelsLoaded[actualModelId] ?? false;
-	};
 
 
-	const wakeUpSelectedModel = async (modelId) => {
-	  if (!modelId || !$models.length) return;
 
-	  try {
-		const actualModelId = resolveActualModelId(modelId);
+	const areSelectedModelsLoadedReactive = () => {
+			return areSelectedModelsLoaded(selectedModels, atSelectedModel, $modelsLoaded, $models);
+		};
 
-		// Check if this model is already loaded
-		if ($modelsLoaded[actualModelId]) {
-		  console.log(`Model ${actualModelId} is already loaded`);
-		  return;
+	// Add a Set to track models currently being woken up
+	let modelWakeupAttempts = new Set<string>();
+	let lastWakeupTime = new Map<string, number>();
+
+	const WAKEUP_COOLDOWN = 5000; // 5 seconds cooldown between wake-up attempts
+
+	let checkingModels = false;
+
+	// FIXED: Controlled wake-up function that respects cooldowns
+	const wakeUpSelectedModelWithCooldown = async (modelId: string) => {
+		const actualModelId = resolveActualModelId(modelId, $models);
+		const now = Date.now();
+		const lastAttempt = lastWakeupTime.get(actualModelId) || 0;
+
+		// Skip if we've attempted this model recently (within cooldown period)
+		if (now - lastAttempt < WAKEUP_COOLDOWN) {
+			console.log(`Skipping wake-up for ${actualModelId} - cooldown active`);
+			return false;
 		}
 
-		console.log(`Waking up model: ${modelId} -> actual: ${actualModelId}`);
+		// Update last attempt time
+		lastWakeupTime.set(actualModelId, now);
 
-		// Set model as loading
-		setModelLoaded(actualModelId, false);
+		return await wakeUpModel(modelId, $models, $i18n);
+	};
 
-		const response = await fetch(`${WEBUI_API_BASE_URL}/utils/wake_up_models`, {
-		  method: 'POST',
-		  headers: {
-			'Authorization': `Bearer ${localStorage.token}`,
-			'Content-Type': 'application/json'
-		  },
-		  body: JSON.stringify({
-			chat_model: actualModelId,
-			force: false
-		  })
+
+	// Call cleanup when selectedModels changes
+	$: if (selectedModels.length > 0) {
+		// Clean up old models from the store
+		cleanupModelsLoaded(selectedModels, $models);
+
+		// Then check and wake up new models
+		selectedModels.forEach(modelId => {
+			if (modelId && !isModelLoaded(modelId, $modelsLoaded)) {
+				wakeUpSelectedModelWithCooldown(modelId);
+			}
 		});
+	}
 
-		const result = await response.json();
-		console.log('Model wake up response:', result);
-
-		// Update the loading state based on the response
-		const chatModelSuccess = result.chat_model?.success ?? false;
-		setModelLoaded(actualModelId, chatModelSuccess);
-
-		// Show toast notification
-		if (chatModelSuccess) {
-		  toast.success($i18n.t('Model {{modelName}} is ready', { modelName: modelId }));
-		} else {
-		  toast.error($i18n.t('Failed to load model {{modelName}}', { modelName: modelId }));
-		  console.log(`Failed to wake up model ${actualModelId}, will retry`);
-		  // Retry after a delay
-		  setTimeout(() => wakeUpSelectedModel(modelId), 30000);
-		}
-	  } catch (error) {
-		console.error('Error waking up selected model:', error);
-		// Don't block UI on error
-		const actualModelId = resolveActualModelId(modelId);
-		setModelLoaded(actualModelId, true);
-		toast.error($i18n.t('Error loading model {{modelName}}', { modelName: modelId }));
-	  }
-	};
-
-// Add debug reactive statement to track model loading changes
+	// Add debug reactive statement to track model loading changes
 	$: {
 	  console.log('Current modelsLoaded state:', $modelsLoaded);
 	  console.log('Selected models:', selectedModels);
 	  console.log('At selected model:', atSelectedModel?.id);
-	  console.log('Are selected models loaded:', areSelectedModelsLoaded());
+	  console.log('Are selected models loaded:', areSelectedModelsLoadedReactive()); // Fixed function call
 	}
 
-// Update the areSelectedModelsLoaded function to be more robust
-	const areSelectedModelsLoaded = () => {
-	  if (atSelectedModel) {
-		const actualModelId = resolveActualModelId(atSelectedModel.id);
-		const isLoaded = $modelsLoaded[actualModelId] ?? false;
-		console.log(`Checking atSelectedModel ${atSelectedModel.id} -> ${actualModelId}: ${isLoaded}`);
-		return isLoaded;
-	  }
+	// FIXED: Replace the old reactive statements with these controlled ones
+	$: {
+		// Only trigger wake-ups when models list changes or when a model is first selected
+		if ($models.length > 0 && selectedModels.length > 0) {
+			selectedModels.forEach(async (modelId) => {
+				if (modelId && modelId !== '') {
+					// Use the helper function to check if wake-up is needed
+					if (shouldWakeUpModel(modelId, $models)) {
+						const actualModelId = resolveActualModelId(modelId, $models);
+						if (!modelWakeupAttempts.has(actualModelId)) {
+							modelWakeupAttempts.add(actualModelId);
+							const success = await wakeUpSelectedModelWithCooldown(modelId);
 
-	  if (selectedModels.length === 0) {
-		console.log('No models selected');
-		return false;
-	  }
-
-	  const allLoaded = selectedModels.every(modelId => {
-		const actualModelId = resolveActualModelId(modelId);
-		const isLoaded = $modelsLoaded[actualModelId] ?? false;
-		console.log(`Checking selectedModel ${modelId} -> ${actualModelId}: ${isLoaded}`);
-		return isLoaded;
-	  });
-
-	  console.log('All selected models loaded:', allLoaded);
-	  return allLoaded;
-	};
-	// Add reactive statements to wake up models when selection changes
-	$: if (selectedModels.length > 0 && $models.length > 0) {
-	  selectedModels.forEach(modelId => {
-		if (!isModelLoaded(modelId)) {
-		  wakeUpSelectedModel(modelId);
+							// Remove from attempts after cooldown regardless of success
+							setTimeout(() => {
+								modelWakeupAttempts.delete(actualModelId);
+							}, WAKEUP_COOLDOWN);
+						}
+					}
+				}
+			});
 		}
-	  });
 	}
 
-	$: if (atSelectedModel && $models.length > 0) {
-	  if (!isModelLoaded(atSelectedModel.id)) {
-		wakeUpSelectedModel(atSelectedModel.id);
-	  }
+	// FIXED: Handle atSelectedModel changes more efficiently
+	$: {
+		if (atSelectedModel && $models.length > 0) {
+			if (shouldWakeUpModel(atSelectedModel.id, $models)) {
+				const actualModelId = resolveActualModelId(atSelectedModel.id, $models);
+				if (!modelWakeupAttempts.has(actualModelId)) {
+					modelWakeupAttempts.add(actualModelId);
+					wakeUpSelectedModelWithCooldown(atSelectedModel.id).then(() => {
+						setTimeout(() => {
+							modelWakeupAttempts.delete(actualModelId);
+						}, WAKEUP_COOLDOWN);
+					});
+				}
+			}
+		}
 	}
+
+	// FIXED: Clean up tracking when selectedModels change
+	$: {
+		if (selectedModels) {
+			// Clean up old attempts that aren't in current selection
+			const currentActualIds = selectedModels
+				.filter(id => id && id !== '')
+				.map(id => resolveActualModelId(id, $models));
+
+			// Remove attempts for models no longer selected
+			modelWakeupAttempts.forEach(id => {
+				if (!currentActualIds.includes(id) && (!atSelectedModel || resolveActualModelId(atSelectedModel.id, $models) !== id)) {
+					modelWakeupAttempts.delete(id);
+				}
+			});
+
+			// Clean up modelsLoaded store
+			cleanupModelsLoaded(selectedModels, $models);
+		}
+	}
+
 
 	// Add debug logging
 	$: console.log('Models loaded state:', $modelsLoaded);
-	$: console.log('Selected models loaded:', areSelectedModelsLoaded());
+	$: console.log('Selected models loaded:', areSelectedModelsLoadedReactive());
 
 	$: onChange({
 		prompt,
@@ -521,6 +523,40 @@
 			dropzoneElement?.removeEventListener('dragleave', onDragLeave);
 		}
 	});
+
+	const handleSubmit = async () => {
+    // Check 1: Is there anything to send?
+    if (prompt === '' && files.length === 0) {
+        return; // Do nothing if input is empty
+    }
+
+    // Check 2: Is a model selected? (Replaces your toast.error)
+    const modelToCheck = atSelectedModel?.id || selectedModels[0];
+    if (!modelToCheck) {
+        toast.error($i18n.t('Please select a model first.'));
+        return;
+    }
+
+    // Check 3: Is the selected model still loading? (Replaces your toast.info)
+    if (!areSelectedModelsLoadedReactive()) {
+        toast.info($i18n.t('Models are still loading, please wait...'));
+        return;
+    }
+
+    // Check 4: Does the selected model need a wake-up call?
+    if (needsModelCheck(modelToCheck, $models)) {
+        checkingModels = true;
+        const modelsReady = await ensureModelsAwakeSSE(modelToCheck, $models, $i18n);
+        checkingModels = false;
+
+        if (!modelsReady) {
+            return; // Stop if models failed to wake up
+        }
+    }
+
+    // All checks passed, send the message!
+    dispatch('submit', prompt);
+};
 </script>
 
 <FilesOverlay show={dragged} />
@@ -671,10 +707,7 @@
 					{:else}
 						<form
 							class="w-full flex gap-1.5"
-							on:submit|preventDefault={() => {
-								// check if selectedModels support image input
-								dispatch('submit', prompt);
-							}}
+							on:submit|preventDefault={handleSubmit}
 						>
 							<div
 								class="flex-1 flex flex-col relative w-full shadow-lg rounded-3xl border border-gray-50 dark:border-gray-850 hover:border-gray-100 focus-within:border-gray-100 hover:dark:border-gray-800 focus-within:dark:border-gray-800 transition px-1 bg-white/90 dark:bg-gray-400/5 dark:text-gray-100"
@@ -932,14 +965,8 @@
 
 															// In the keydown handlers, update the condition:
 															if (enterPressed) {
-															  e.preventDefault();
-															  if ((prompt !== '' || files.length > 0) && areSelectedModelsLoaded() && (selectedModels.length > 0 || atSelectedModel)) {
-																dispatch('submit', prompt);
-															  } else if ((prompt !== '' || files.length > 0) && !areSelectedModelsLoaded()) {
-																toast.info($i18n.t('Models are still loading, please wait...'));
-															  } else if ((prompt !== '' || files.length > 0) && selectedModels.length === 0 && !atSelectedModel) {
-																toast.error($i18n.t('Please select a model first.'));
-															  }
+																e.preventDefault();
+																handleSubmit(); // All the logic is now inside handleSubmit
 															}
 														}
 													}
@@ -1569,35 +1596,39 @@
 												<Tooltip content={$i18n.t('Send message')}>
 													<!-- Update the conditional rendering to force reactivity -->
 													{#key $modelsLoaded}
-													  {#if !areSelectedModelsLoaded() || (selectedModels.length === 0 && !atSelectedModel)}
-														<!-- Show spinner when models are not loaded or no model selected -->
-														<div class="bg-gray-200 dark:bg-gray-700 transition rounded-full p-1.5 self-center">
-														  <Spinner className="size-6" />
-														</div>
-													  {:else}
-														<!-- Show send button when models are loaded and selected -->
-														<button
-														  id="send-message-button"
-														  class="{!(prompt === '' && files.length === 0)
-															? 'bg-black text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100 '
-															: 'text-white bg-gray-200 dark:text-gray-900 dark:bg-gray-700 disabled'} transition rounded-full p-1.5 self-center"
-														  type="submit"
-														  disabled={prompt === '' && files.length === 0}
-														>
-														  <svg
-															xmlns="http://www.w3.org/2000/svg"
-															viewBox="0 0 16 16"
-															fill="currentColor"
-															class="size-5"
-														  >
-															<path
-															  fill-rule="evenodd"
-															  d="M8 14a.75.75 0 0 1-.75-.75V4.56L4.03 7.78a.75.75 0 0 1-1.06-1.06l4.5-4.5a.75.75 0 0 1 1.06 0l4.5 4.5a.75.75 0 0 1-1.06 1.06L8.75 4.56v8.69A.75.75 0 0 1 8 14Z"
-															  clip-rule="evenodd"
-															/>
-														  </svg>
-														</button>
-													  {/if}
+														{#if checkingModels}
+															<!-- Show spinner when checking/waiting for models via SSE -->
+															<div class="bg-gray-200 dark:bg-gray-700 transition rounded-full p-1.5 self-center">
+																<Spinner className="size-6" />
+															</div>
+														{:else if !areSelectedModelsLoadedReactive() || (selectedModels.length === 0 && !atSelectedModel)}
+															<!-- Show spinner when models are not loaded or no model selected -->
+															<div class="bg-gray-200 dark:bg-gray-700 transition rounded-full p-1.5 self-center">
+																<Spinner className="size-6" />
+															</div>
+														{:else}
+															<!-- Show send button when models are loaded and selected -->
+															<button
+																id="send-message-button"
+																class="{!(prompt === '' && files.length === 0)
+																	? 'bg-black text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100 '
+																	: 'text-white bg-gray-200 dark:text-gray-900 dark:bg-gray-700 disabled'} transition rounded-full p-1.5 self-center"
+																type="submit"
+																disabled={prompt === '' && files.length === 0}
+															>
+																<svg
+																	xmlns="http://www.w3.org/2000/svg"
+																	viewBox="0 0 16 16"
+																	fill="currentColor"
+																	class="w-5 h-5"
+																>
+																	<path
+																		fill-rule="evenodd"
+																		d="M8 12a.5.5 0 0 0 .5-.5V5.707l2.146 2.147a.5.5 0 0 0 .708-.708l-3-3a.5.5 0 0 0-.708 0l-3 3a.5.5 0 1 0 .708.708L7.5 5.707V11.5a.5.5 0 0 0 .5.5z"
+																	/>
+																</svg>
+															</button>
+														{/if}
 													{/key}
 												</Tooltip>
 											</div>

@@ -43,7 +43,7 @@
 	}
 
 	$: {
-		console.log('sources', sources);
+		// console.log('sources', sources);
 		citations = sources.reduce((acc, source) => {
 			if (Object.keys(source).length === 0) {
 				return acc;
@@ -83,7 +83,7 @@
 			});
 			return acc;
 		}, []);
-		console.log('citations', citations);
+		// console.log('citations', citations);
 
 		showRelevance = calculateShowRelevance(citations);
 		showPercentage = shouldShowPercentage(citations);

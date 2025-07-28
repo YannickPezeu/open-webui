@@ -8,6 +8,7 @@
 	});
 
 	import { onMount, tick, setContext } from 'svelte';
+
 	import {
 		config,
 		user,
