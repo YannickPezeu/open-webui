@@ -7,8 +7,7 @@
 		stiffness: 0.05
 	});
 
-	import { onMount, tick, setContext } from 'svelte';
-
+	import { onMount, tick, setContext, onDestroy } from 'svelte';
 	import {
 		config,
 		user,
@@ -88,6 +87,12 @@
 
 		_socket.on('connect', () => {
 			console.log('connected', _socket.id);
+			if (localStorage.getItem('token')) {
+				// Emit user-join event with auth token
+				_socket.emit('user-join', { auth: { token: localStorage.token } });
+			} else {
+				console.warn('No token found in localStorage, user-join event not emitted');
+			}
 		});
 
 		_socket.on('reconnect_attempt', (attempt) => {
@@ -103,16 +108,6 @@
 			if (details) {
 				console.log('Additional details:', details);
 			}
-		});
-
-		_socket.on('user-list', (data) => {
-			console.log('user-list', data);
-			activeUserIds.set(data.user_ids);
-		});
-
-		_socket.on('usage', (data) => {
-			console.log('usage', data);
-			USAGE_POOL.set(data['models']);
 		});
 	};
 
@@ -538,6 +533,12 @@
 
 				$socket?.on('chat-events', chatEventHandler);
 				$socket?.on('channel-events', channelEventHandler);
+
+				// Set up the token expiry check
+				if (tokenTimer) {
+					clearInterval(tokenTimer);
+				}
+				tokenTimer = setInterval(checkTokenExpiry, 15000);
 			} else {
 				$socket?.off('chat-events', chatEventHandler);
 				$socket?.off('channel-events', channelEventHandler);
@@ -585,17 +586,8 @@
 					});
 
 					if (sessionUser) {
-						// Save Session User to Store
-						$socket.emit('user-join', { auth: { token: sessionUser.token } });
-
 						await user.set(sessionUser);
 						await config.set(await getBackendConfig());
-
-						// Set up the token expiry check
-						if (tokenTimer) {
-							clearInterval(tokenTimer);
-						}
-						tokenTimer = setInterval(checkTokenExpiry, 1000);
 					} else {
 						// Redirect Invalid Session User to /auth Page
 						localStorage.removeItem('token');

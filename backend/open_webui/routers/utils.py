@@ -36,7 +36,7 @@ class CodeForm(BaseModel):
 
 
 @router.post("/code/format")
-async def format_code(form_data: CodeForm, user=Depends(get_verified_user)):
+async def format_code(form_data: CodeForm, user=Depends(get_admin_user)):
     try:
         formatted_code = black.format_str(form_data.code, mode=black.Mode())
         return {"code": formatted_code}
@@ -267,6 +267,13 @@ async def wake_up_models(request: WakeUpModelsRequest, response: Response):
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
 
+    # First check if models are available in the inference provider
+    log.info(f"[WAKE_UP] Checking model availability...")
+    embedding_available = await check_model_availability_async(request.embedding_model)
+    chat_available = await check_model_availability_async(request.chat_model)
+    reranker_available = await check_model_availability_async(request.reranker_model)
+
+
     global last_wakeup_times, active_wakeup_tasks
     current_time = time.time()
 
@@ -287,11 +294,7 @@ async def wake_up_models(request: WakeUpModelsRequest, response: Response):
     chat_task_active = request.chat_model in active_wakeup_tasks
     reranker_task_active = request.reranker_model in active_wakeup_tasks
 
-    # First check if models are available in the inference provider
-    log.info(f"[WAKE_UP] Checking model availability...")
-    embedding_available = await check_model_availability_async(request.embedding_model)
-    chat_available = await check_model_availability_async(request.chat_model)
-    reranker_available = await check_model_availability_async(request.reranker_model)
+
 
     # Get last wake-up times
     embedding_last_wakeup = last_wakeup_times.get(request.embedding_model, 0)

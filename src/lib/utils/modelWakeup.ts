@@ -121,7 +121,7 @@ export const wakeUpModel = async (
 
     // CRITICAL FIX 4: Add unique timestamp to prevent any caching issues
     const timestamp = Date.now();
-    const response = await fetch(`${WEBUI_API_BASE_URL}/utils/wake_up_models?t=${timestamp}`, {
+    const response = await fetch(`${WEBUI_API_BASE_URL}/utils/wake_up_models_sse?t=${timestamp}`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${localStorage.token}`,
