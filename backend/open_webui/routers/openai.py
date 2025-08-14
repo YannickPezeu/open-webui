@@ -362,7 +362,9 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
                 response if isinstance(response, list) else response.get("data", [])
             ):
                 if prefix_id:
-                    model["id"] = f"{prefix_id}.{model['id']}"
+                    model["id"] = (
+                        f"{prefix_id}.{model.get('id', model.get('name', ''))}"
+                    )
 
                 if tags:
                     model["tags"] = tags
@@ -593,15 +595,21 @@ async def verify_connection(
                     headers=headers,
                     ssl=AIOHTTP_CLIENT_SESSION_SSL,
                 ) as r:
-                    if r.status != 200:
-                        # Extract response error details if available
-                        error_detail = f"HTTP Error: {r.status}"
-                        res = await r.json()
-                        if "error" in res:
-                            error_detail = f"External Error: {res['error']}"
-                        raise Exception(error_detail)
+                    try:
+                        response_data = await r.json()
+                    except Exception:
+                        response_data = await r.text()
 
-                    response_data = await r.json()
+                    if r.status != 200:
+                        if isinstance(response_data, (dict, list)):
+                            return JSONResponse(
+                                status_code=r.status, content=response_data
+                            )
+                        else:
+                            return PlainTextResponse(
+                                status_code=r.status, content=response_data
+                            )
+
                     return response_data
             else:
                 headers["Authorization"] = f"Bearer {key}"
@@ -611,13 +619,20 @@ async def verify_connection(
                     headers=headers,
                     ssl=AIOHTTP_CLIENT_SESSION_SSL,
                 ) as r:
+                    try:
+                        response_data = await r.json()
+                    except Exception:
+                        response_data = await r.text()
+
                     if r.status != 200:
-                        # Extract response error details if available
-                        error_detail = f"HTTP Error: {r.status}"
-                        res = await r.json()
-                        if "error" in res:
-                            error_detail = f"External Error: {res['error']}"
-                        raise Exception(error_detail)
+                        if isinstance(response_data, (dict, list)):
+                            return JSONResponse(
+                                status_code=r.status, content=response_data
+                            )
+                        else:
+                            return PlainTextResponse(
+                                status_code=r.status, content=response_data
+                            )
 
                     response_data = await r.json()
                     return response_data
@@ -787,10 +802,12 @@ async def generate_chat_completion(
     url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
     key = request.app.state.config.OPENAI_API_KEYS[idx]
 
-    # Check if model is from "o" series
-    is_o_series = payload["model"].lower().startswith(("o1", "o3", "o4"))
-    if is_o_series:
-        payload = openai_o_series_handler(payload)
+    # Check if model is a reasoning model that needs special handling
+    is_reasoning_model = (
+        payload["model"].lower().startswith(("o1", "o3", "o4", "gpt-5"))
+    )
+    if is_reasoning_model:
+        payload = openai_reasoning_model_handler(payload)
     elif "api.openai.com" not in url:
         # Remove "max_completion_tokens" from the payload for backward compatibility
         if "max_completion_tokens" in payload:
@@ -881,7 +898,12 @@ async def generate_chat_completion(
                 log.error(e)
                 response = await r.text()
 
-            r.raise_for_status()
+            if r.status >= 400:
+                if isinstance(response, (dict, list)):
+                    return JSONResponse(status_code=r.status, content=response)
+                else:
+                    return PlainTextResponse(status_code=r.status, content=response)
+
             return response
     except Exception as e:
         log.exception(e)
@@ -965,7 +987,19 @@ async def embeddings(request: Request, form_data: dict, user):
                 ),
             )
         else:
-            response_data = await r.json()
+            try:
+                response_data = await r.json()
+            except Exception:
+                response_data = await r.text()
+
+            if r.status >= 400:
+                if isinstance(response_data, (dict, list)):
+                    return JSONResponse(status_code=r.status, content=response_data)
+                else:
+                    return PlainTextResponse(
+                        status_code=r.status, content=response_data
+                    )
+
             return response_data
     except Exception as e:
         log.exception(e)
@@ -1059,7 +1093,19 @@ async def proxy(path: str, request: Request, user=Depends(get_verified_user)):
                 ),
             )
         else:
-            response_data = await r.json()
+            try:
+                response_data = await r.json()
+            except Exception:
+                response_data = await r.text()
+
+            if r.status >= 400:
+                if isinstance(response_data, (dict, list)):
+                    return JSONResponse(status_code=r.status, content=response_data)
+                else:
+                    return PlainTextResponse(
+                        status_code=r.status, content=response_data
+                    )
+
             return response_data
 
     except Exception as e:
