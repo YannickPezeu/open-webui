@@ -171,6 +171,7 @@ def upload_file(
                     ):
                         file_path = Storage.get_file(file_path)
                         result = transcribe(request, file_path, file_metadata)
+                        log.info('result: %s', result)
 
                         process_file(
                             request,
@@ -199,6 +200,8 @@ def upload_file(
                 )
 
         if file_item:
+            log.info(f"File {file_item.id} uploaded successfully")
+            log.info(file_item)
             return file_item
         else:
             raise HTTPException(

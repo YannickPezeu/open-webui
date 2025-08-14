@@ -16,8 +16,6 @@
 		WEBUI_NAME,
 		mobile,
 		socket,
-		activeUserIds,
-		USAGE_POOL,
 		chatId,
 		chats,
 		currentChatPage,
@@ -450,6 +448,7 @@
 		}
 	};
 
+	const TOKEN_EXPIRY_BUFFER = 60; // seconds
 	const checkTokenExpiry = async () => {
 		const exp = $user?.expires_at; // token expiry time in unix timestamp
 		const now = Math.floor(Date.now() / 1000); // current time in unix timestamp
@@ -459,7 +458,7 @@
 			return;
 		}
 
-		if (now >= exp) {
+		if (now >= exp - TOKEN_EXPIRY_BUFFER) {
 			const res = await userSignOut();
 			user.set(null);
 			localStorage.removeItem('token');
@@ -504,6 +503,9 @@
 			if (document.visibilityState === 'visible') {
 				isLastActiveTab.set(true); // This tab is now the active tab
 				bc.postMessage('active'); // Notify other tabs that this tab is active
+
+				// Check token expiry when the tab becomes active
+				checkTokenExpiry();
 			}
 		};
 

@@ -28,21 +28,21 @@
 		user as _user,
 		showControls,
 		TTSWorker,
-		modelsLoaded
+		modelsLoaded,
+		temporaryChatEnabled
 	} from '$lib/stores';
 
-	import {
-		wakeUpModel,
-		areSelectedModelsLoaded,
-		cleanupModelsLoaded,
-		resolveActualModelId,
-		setModelLoaded,
-		isModelLoaded,
-		shouldWakeUpModel,
-		ensureModelsAwakeSSE,
-		needsModelCheck,
-		updateLastInteractionTime
-	} from '$lib/utils/modelWakeup';
+import {
+  areSelectedModelsLoaded,
+  cleanupModelsLoaded,
+  resolveActualModelId,
+  shouldWakeUpModel,
+  wakeUpModel,
+  ensureModelsAwakeSSE,
+  needsModelCheck,
+  updateLastInteractionTime,
+		checkModelAvailability
+} from '$lib/utils/modelWakeup';
 
 	import {
 		blobToFile,
@@ -99,9 +99,6 @@
 	export let atSelectedModel: Model | undefined = undefined;
 	export let selectedModels: [''];
 
-	let selectedModelIds = [];
-	$: selectedModelIds = atSelectedModel !== undefined ? [atSelectedModel.id] : selectedModels;
-
 	export let history;
 	export let taskIds = null;
 
@@ -123,125 +120,20 @@
 
 
 
-
-
-	const areSelectedModelsLoadedReactive = () => {
-			return areSelectedModelsLoaded(selectedModels, atSelectedModel, $modelsLoaded, $models);
-		};
-
-	// Add a Set to track models currently being woken up
-	let modelWakeupAttempts = new Set<string>();
-	let lastWakeupTime = new Map<string, number>();
-
-	const WAKEUP_COOLDOWN = 5000; // 5 seconds cooldown between wake-up attempts
-
-	let checkingModels = false;
-
-	// FIXED: Controlled wake-up function that respects cooldowns
-	const wakeUpSelectedModelWithCooldown = async (modelId: string) => {
-		const actualModelId = resolveActualModelId(modelId, $models);
-		const now = Date.now();
-		const lastAttempt = lastWakeupTime.get(actualModelId) || 0;
-
-		// Skip if we've attempted this model recently (within cooldown period)
-		if (now - lastAttempt < WAKEUP_COOLDOWN) {
-			console.log(`Skipping wake-up for ${actualModelId} - cooldown active`);
-			return false;
-		}
-
-		// Update last attempt time
-		lastWakeupTime.set(actualModelId, now);
-
-		return await wakeUpModel(modelId, $models, $i18n);
-	};
-
-
-	// Call cleanup when selectedModels changes
-	$: if (selectedModels.length > 0) {
-		// Clean up old models from the store
-		cleanupModelsLoaded(selectedModels, $models);
-
-		// Then check and wake up new models
-		selectedModels.forEach(modelId => {
-			if (modelId && !isModelLoaded(modelId, $modelsLoaded)) {
-				wakeUpSelectedModelWithCooldown(modelId);
-			}
-		});
-	}
-
 	// Add debug reactive statement to track model loading changes
 	$: {
 	  console.log('Current modelsLoaded state:', $modelsLoaded);
 	  console.log('Selected models:', selectedModels);
 	  console.log('At selected model:', atSelectedModel?.id);
-	  console.log('Are selected models loaded:', areSelectedModelsLoadedReactive()); // Fixed function call
 	}
 
-	// FIXED: Replace the old reactive statements with these controlled ones
-	$: {
-		// Only trigger wake-ups when models list changes or when a model is first selected
-		if ($models.length > 0 && selectedModels.length > 0) {
-			selectedModels.forEach(async (modelId) => {
-				if (modelId && modelId !== '') {
-					// Use the helper function to check if wake-up is needed
-					if (shouldWakeUpModel(modelId, $models)) {
-						const actualModelId = resolveActualModelId(modelId, $models);
-						if (!modelWakeupAttempts.has(actualModelId)) {
-							modelWakeupAttempts.add(actualModelId);
-							const success = await wakeUpSelectedModelWithCooldown(modelId);
 
-							// Remove from attempts after cooldown regardless of success
-							setTimeout(() => {
-								modelWakeupAttempts.delete(actualModelId);
-							}, WAKEUP_COOLDOWN);
-						}
-					}
-				}
-			});
-		}
-	}
 
-	// FIXED: Handle atSelectedModel changes more efficiently
-	$: {
-		if (atSelectedModel && $models.length > 0) {
-			if (shouldWakeUpModel(atSelectedModel.id, $models)) {
-				const actualModelId = resolveActualModelId(atSelectedModel.id, $models);
-				if (!modelWakeupAttempts.has(actualModelId)) {
-					modelWakeupAttempts.add(actualModelId);
-					wakeUpSelectedModelWithCooldown(atSelectedModel.id).then(() => {
-						setTimeout(() => {
-							modelWakeupAttempts.delete(actualModelId);
-						}, WAKEUP_COOLDOWN);
-					});
-				}
-			}
-		}
-	}
 
-	// FIXED: Clean up tracking when selectedModels change
-	$: {
-		if (selectedModels) {
-			// Clean up old attempts that aren't in current selection
-			const currentActualIds = selectedModels
-				.filter(id => id && id !== '')
-				.map(id => resolveActualModelId(id, $models));
-
-			// Remove attempts for models no longer selected
-			modelWakeupAttempts.forEach(id => {
-				if (!currentActualIds.includes(id) && (!atSelectedModel || resolveActualModelId(atSelectedModel.id, $models) !== id)) {
-					modelWakeupAttempts.delete(id);
-				}
-			});
-
-			// Clean up modelsLoaded store
-			cleanupModelsLoaded(selectedModels, $models);
-		}
-	}
 
 
 	// Add debug logging
 	$: console.log('Models loaded state:', $modelsLoaded);
-	$: console.log('Selected models loaded:', areSelectedModelsLoadedReactive());
 
 	$: onChange({
 		prompt,
@@ -688,7 +580,8 @@
 					console.log('File upload completed:', {
 						id: uploadedFile.id,
 						name: fileItem.name,
-						collection: uploadedFile?.meta?.collection_name
+						collection: uploadedFile?.meta?.collection_name,
+						content: uploadedFile?.data.content
 					});
 
 					if (uploadedFile.error) {
@@ -941,38 +834,81 @@
 		}
 	});
 
-	const handleSubmit = async () => {
-    // Check 1: Is there anything to send?
-    if (prompt === '' && files.length === 0) {
-        return; // Do nothing if input is empty
+	// Component state wakeup
+	let selectedModelIds = [];
+	$: selectedModelIds = atSelectedModel !== undefined ? [atSelectedModel.id] : selectedModels;
+
+	let checkingModels = false;
+
+	// Clean up models when selection changes
+	$: if (selectedModels.length > 0) {
+	  cleanupModelsLoaded(selectedModels, $models);
+	}
+
+	// Wake up models when they are selected
+	$: {
+	  if ($models.length > 0 && selectedModelIds.length > 0) {
+		selectedModelIds.forEach(async (modelId) => {
+		  if (modelId && shouldWakeUpModel(modelId, $models)) {
+			await wakeUpModel(modelId, $models, $i18n);
+		  }
+		});
+	  }
+	}
+
+
+const handleSubmit = async () => {
+  // Return early if there's no input
+  if (prompt === '' && files.length === 0) {
+    return;
+  }
+
+  // Step 1: Determine the target models for THIS submission.
+  // If @mentioning a model, that's the only target.
+  // Otherwise, the targets are all currently selected models.
+  const targetModelIds = (atSelectedModel ? [atSelectedModel.id] : selectedModels).filter(id => id);
+
+  // Check if any models are targeted
+  if (targetModelIds.length === 0) {
+    toast.error($i18n.t('Please select a model first.'));
+    return;
+  }
+
+  // Step 2: Check if all TARGET models are loaded.
+  // This loop ensures that for a multi-model message, all targets must be ready.
+  // For a single-model message, it only checks that one.
+  for (const modelId of targetModelIds) {
+    const actualModelId = resolveActualModelId(modelId, $models);
+    const isAvailable = await checkModelAvailability(modelId, $models);
+
+    // Skip unavailable models, as they can't be loaded anyway.
+    if (!isAvailable) continue;
+
+    // If an available model is not marked as loaded, block the submission.
+    if (!$modelsLoaded[actualModelId]) {
+      toast.info($i18n.t('Models are still loading, please wait...'));
+      return;
     }
+  }
 
-    // Check 2: Is a model selected? (Replaces your toast.error)
-    const modelToCheck = atSelectedModel?.id || selectedModels[0];
-    if (!modelToCheck) {
-        toast.error($i18n.t('Please select a model first.'));
-        return;
+  // Step 3: Perform a final "wake-up" check on the primary target model.
+  // This handles cases where a model might have gone to sleep since being loaded.
+  const primaryTargetModel = targetModelIds[0];
+  if (needsModelCheck(primaryTargetModel, $models)) {
+    checkingModels = true;
+    const modelsReady = await ensureModelsAwakeSSE(primaryTargetModel, $models, $i18n);
+    checkingModels = false;
+    if (!modelsReady) {
+      return;
     }
+  }
 
-    // Check 3: Is the selected model still loading? (Replaces your toast.info)
-    if (!areSelectedModelsLoadedReactive()) {
-        toast.info($i18n.t('Models are still loading, please wait...'));
-        return;
-    }
+  // Step 4: Update activity time for all targets and send the message.
+  targetModelIds.forEach(modelId => {
+    updateLastInteractionTime(modelId, $models);
+  });
 
-    // Check 4: Does the selected model need a wake-up call?
-    if (needsModelCheck(modelToCheck, $models)) {
-        checkingModels = true;
-        const modelsReady = await ensureModelsAwakeSSE(modelToCheck, $models, $i18n);
-        checkingModels = false;
-
-        if (!modelsReady) {
-            return; // Stop if models failed to wake up
-        }
-    }
-
-    // All checks passed, send the message!
-    dispatch('submit', prompt);
+  dispatch('submit', prompt);
 };
 </script>
 
@@ -1624,12 +1560,10 @@
 
 														if (enterPressed) {
 															e.preventDefault();
+    														handleSubmit();
 														}
 
-														// Submit the prompt when Enter key is pressed
-														if ((prompt !== '' || files.length > 0) && enterPressed) {
-															dispatch('submit', prompt);
-														}
+
 													}
 												}
 

@@ -19,6 +19,8 @@ ARG BUILD_HASH=dev-build
 # Override at your own risk - non-root configurations are untested
 ARG UID=0
 ARG GID=0
+ARG ENV=dev
+
 
 ######## WebUI frontend ########
 FROM --platform=$BUILDPLATFORM node:22-alpine3.20 AS build
@@ -49,7 +51,7 @@ ARG UID
 ARG GID
 
 ## Basis ##
-ENV ENV=prod \
+ENV ENV=${ENV} \
     PORT=8080 \
     # pass build args to the build
     USE_OLLAMA_DOCKER=${USE_OLLAMA} \

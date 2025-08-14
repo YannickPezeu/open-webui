@@ -18,7 +18,7 @@ from starlette.background import BackgroundTask
 
 from open_webui.models.models import Models
 from open_webui.config import (
-    CACHE_DIR,
+    CACHE_DIR, MISTRAL_OCR_API_KEY,
 )
 from open_webui.env import (
     MODELS_CACHE_TTL,
@@ -44,6 +44,17 @@ from open_webui.utils.misc import (
 
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.access_control import has_access
+# Ajoutez ces imports en haut du fichier openai.py
+import base64
+import tempfile
+import os
+from PIL import Image
+import io
+import pytesseract
+import time
+from typing import Dict, Tuple
+
+
 
 
 log = logging.getLogger(__name__)
@@ -55,6 +66,611 @@ log.setLevel(SRC_LOG_LEVELS["OPENAI"])
 # Utility functions
 #
 ##########################################
+
+# Fonctions utilitaires à ajouter dans le fichier openai.py
+
+
+def extract_text_from_image_content(image_content: str) -> str:
+    """Extrait le texte d'une image encodée en base64."""
+    try:
+        # Décoder l'image base64
+        image_data = base64.b64decode(image_content)
+
+        # Convertir en PIL Image
+        image = Image.open(io.BytesIO(image_data))
+
+        # Préprocessing basique
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+
+        # Configuration OCR optimisée
+        custom_config = r'--oem 3 --psm 6'
+
+        # Extraction OCR
+        text = pytesseract.image_to_string(image, config=custom_config)
+
+        return text.strip()
+
+    except Exception as e:
+        log.error(f"OCR extraction failed: {str(e)}")
+        return f"[OCR Error: Unable to extract text from image]"
+
+
+def has_image_content(messages: list) -> bool:
+    """Vérifie si les messages contiennent des images."""
+    for message in messages:
+        if isinstance(message.get('content'), list):
+            for content_item in message['content']:
+                if content_item.get('type') == 'image_url':
+                    return True
+    return False
+
+
+def extract_images_and_convert_to_text(messages: list) -> list:
+    """Extrait les images des messages et les remplace par le texte OCR."""
+    modified_messages = []
+
+    for message in messages:
+        if isinstance(message.get('content'), list):
+            # Message avec contenu mixte (texte + images)
+            text_parts = []
+
+            for content_item in message['content']:
+                if content_item.get('type') == 'text':
+                    text_parts.append(content_item['text'])
+
+                elif content_item.get('type') == 'image_url':
+                    # Extraire l'image et faire l'OCR
+                    image_url = content_item['image_url']['url']
+
+                    if image_url.startswith('data:image/'):
+                        try:
+                            # Format: data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ...
+                            header, image_content = image_url.split(',', 1)
+
+                            # OCR
+                            ocr_text = extract_text_from_image_content(image_content)
+
+                            text_parts.append(f"\n[Image Content - OCR]: {ocr_text}\n")
+
+                        except Exception as e:
+                            log.error(f"Failed to process image: {str(e)}")
+                            text_parts.append(f"\n[Image Processing Failed]\n")
+
+            # Créer un nouveau message avec seulement du texte
+            modified_message = {
+                'role': message['role'],
+                'content': ' '.join(text_parts) if text_parts else ""
+            }
+            modified_messages.append(modified_message)
+
+        else:
+            # Message texte simple, pas de modification
+            modified_messages.append(message)
+
+    return modified_messages
+
+
+def is_multimodal_error(response_dict: dict) -> bool:
+    """Vérifie si l'erreur indique qu'un modèle non-multimodal a reçu des images."""
+    if isinstance(response_dict, dict) and "error" in response_dict:
+        error_message = response_dict["error"].get("message", "").lower()
+
+        # Patterns d'erreur pour détecter les problèmes de multimodalité
+        multimodal_error_patterns = [
+            "is not a multimodal model",
+            "does not support vision",
+            "images not supported",
+            "vision not supported",
+            "multimodal not supported"
+        ]
+
+        return any(pattern in error_message for pattern in multimodal_error_patterns)
+
+    return False
+
+
+import aiohttp
+import json
+
+
+async def extract_text_with_vision_model(image_content: str, image_format: str = "jpeg") -> str:
+    """
+    Utilise un modèle vision (Pixtral) pour extraire le texte et décrire l'image.
+
+    :param image_content: Contenu de l'image encodé en base64
+    :param image_format: Format de l'image
+    :return: Texte extrait et description de l'image
+    """
+    try:
+        # Configuration du modèle vision - ajustez selon votre setup
+        vision_model_url = "https://api.mistral.ai/v1/chat/completions"  # ou votre endpoint
+        vision_model_key = "fCu4kTgPZ5mXZ8wCnlB0dB3dxOhBQIDx"  # ou variable d'environnement
+        vision_model_name = "pixtral-12b-2409"  # ou le modèle que vous utilisez
+
+        # Alternative: utiliser un endpoint local si vous avez Pixtral en local
+        # vision_model_url = "http://localhost:11434/v1/chat/completions"  # Ollama
+        # vision_model_name = "pixtral"
+
+        # Construire la requête pour le modèle vision
+        image_url = f"data:image/{image_format};base64,{image_content}"
+
+        vision_payload = {
+            "model": vision_model_name,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Please extract all visible text from this image and provide a brief description of what you see. Format your response as:\n\nTEXT CONTENT:\n[extracted text here]\n\nIMAGE DESCRIPTION:\n[brief description here]"
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": image_url
+                            }
+                        }
+                    ]
+                }
+            ],
+            "max_tokens": 1000,
+            "temperature": 0.1  # Température basse pour plus de précision
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {vision_model_key}"
+        }
+
+        # Faire l'appel API
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                    vision_model_url,
+                    json=vision_payload,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=30)
+            ) as response:
+
+                if response.status == 200:
+                    result = await response.json()
+                    extracted_content = result["choices"][0]["message"]["content"]
+
+                    log.info("Vision model OCR successful")
+                    return extracted_content
+                else:
+                    error_text = await response.text()
+                    log.error(f"Vision model API error {response.status}: {error_text}")
+                    return f"[Vision Model Error: API returned {response.status}]"
+
+    except Exception as e:
+        log.error(f"Vision model OCR failed: {str(e)}")
+        return f"[Vision Model Error: {str(e)}]"
+
+
+async def extract_text_from_image_content_simple(image_content: str, image_format: str = "jpeg") -> str:
+    """
+    Version simplifiée qui essaie d'abord le modèle vision, puis pytesseract en fallback.
+    """
+    try:
+        # Essayer d'abord avec le modèle vision
+        vision_result = await extract_text_with_vision_model(image_content, image_format)
+
+        # Vérifier si le résultat est valide
+        if not vision_result.startswith("[Vision Model Error"):
+            return vision_result
+
+        log.warning("Vision model failed, falling back to pytesseract...")
+
+        # Fallback vers pytesseract basique
+        image_data = base64.b64decode(image_content)
+        image = Image.open(io.BytesIO(image_data))
+
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+
+        # OCR simple avec pytesseract
+        text = pytesseract.image_to_string(image, config=r'--oem 3 --psm 6')
+
+        return f"TEXT CONTENT:\n{text.strip()}\n\nIMAGE DESCRIPTION:\n[Basic OCR - no description available]"
+
+    except Exception as e:
+        log.error(f"All OCR methods failed: {str(e)}")
+        return f"[OCR Error: Unable to extract text from image]"
+
+
+# Version encore plus simple si vous avez juste besoin de pytesseract basique
+def extract_text_from_image_content_basic(image_content: str) -> str:
+    """Version basique avec pytesseract simple - pas de préprocessing compliqué."""
+    try:
+        # Décoder l'image
+        image_data = base64.b64decode(image_content)
+        image = Image.open(io.BytesIO(image_data))
+
+        # Conversion simple
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+
+        # OCR basique
+        text = pytesseract.image_to_string(image, config=r'--oem 3 --psm 6')
+
+        return text.strip()
+
+    except Exception as e:
+        log.error(f"Basic OCR failed: {str(e)}")
+        return f"[OCR Error: Unable to extract text from image]"
+
+
+# MODIFIEZ la fonction extract_images_and_convert_to_text pour utiliser la version async
+
+async def extract_images_and_convert_to_text_async(messages: list) -> list:
+    """Version async pour supporter les appels API aux modèles vision."""
+    modified_messages = []
+
+    for message in messages:
+        if isinstance(message.get('content'), list):
+            text_parts = []
+
+            for content_item in message['content']:
+                if content_item.get('type') == 'text':
+                    text_parts.append(content_item['text'])
+
+                elif content_item.get('type') == 'image_url':
+                    image_url = content_item['image_url']['url']
+
+                    if image_url.startswith('data:image/'):
+                        try:
+                            header, image_content = image_url.split(',', 1)
+                            image_format = header.split('/')[1].split(';')[0]
+
+                            # Utiliser la version simple (changez ici selon votre préférence)
+                            # Option 1: Modèle vision + fallback pytesseract
+                            extracted_content = await extract_text_from_image_content_simple(image_content, image_format)
+
+                            # Option 2: Juste pytesseract basique (pas d'appel API)
+                            # extracted_content = extract_text_from_image_content_basic(image_content)
+
+                            text_parts.append(f"\n[Image Content]:\n{extracted_content}\n")
+
+                        except Exception as e:
+                            log.error(f"Failed to process image: {str(e)}")
+                            text_parts.append(f"\n[Image Processing Failed]\n")
+
+            modified_message = {
+                'role': message['role'],
+                'content': ' '.join(text_parts) if text_parts else ""
+            }
+            modified_messages.append(modified_message)
+
+        else:
+            modified_messages.append(message)
+
+    return modified_messages
+
+
+
+
+
+
+
+
+
+# Ajouts en haut du fichier openai.py
+import hashlib
+import time
+from typing import Dict, Tuple
+
+# Cache global pour stocker les résultats OCR par session
+# Structure: {session_id: {image_hash: (ocr_result, timestamp)}}
+OCR_CACHE: Dict[str, Dict[str, Tuple[str, float]]] = {}
+
+# Nettoyage automatique des sessions anciennes (après 1 heure)
+CACHE_EXPIRY_SECONDS = 3600
+
+
+def get_image_hash(image_content: str) -> str:
+    """
+    Génère un hash unique pour une image encodée en base64.
+    """
+    try:
+        # Utiliser SHA256 pour créer un hash unique de l'image
+        image_hash = hashlib.sha256(image_content.encode()).hexdigest()[:16]  # 16 premiers caractères
+        return image_hash
+    except Exception as e:
+        log.error(f"Failed to generate image hash: {str(e)}")
+        return f"error_{int(time.time())}"
+
+
+def get_session_id_from_request(request, user) -> str:
+    """
+    Génère un ID de session unique basé sur l'utilisateur et éventuellement le chat.
+    """
+    try:
+        # Essayer de récupérer l'ID du chat depuis les métadonnées
+        # Vous devrez adapter selon votre structure
+        chat_id = getattr(request, 'chat_id', None)
+        if not chat_id:
+            # Fallback: utiliser l'user ID comme session
+            chat_id = f"user_{user.id}"
+
+        return chat_id
+    except Exception:
+        # Fallback en cas d'erreur
+        return f"user_{user.id}_{int(time.time())}"
+
+
+def cleanup_expired_cache():
+    """
+    Nettoie les entrées de cache expirées.
+    """
+    try:
+        current_time = time.time()
+        expired_sessions = []
+
+        for session_id, session_cache in OCR_CACHE.items():
+            expired_hashes = []
+            for image_hash, (result, timestamp) in session_cache.items():
+                if current_time - timestamp > CACHE_EXPIRY_SECONDS:
+                    expired_hashes.append(image_hash)
+
+            # Supprimer les hash expirés
+            for hash_to_remove in expired_hashes:
+                del session_cache[hash_to_remove]
+
+            # Si la session est vide, la marquer pour suppression
+            if not session_cache:
+                expired_sessions.append(session_id)
+
+        # Supprimer les sessions vides
+        for session_to_remove in expired_sessions:
+            del OCR_CACHE[session_to_remove]
+
+        if expired_sessions or any(expired_hashes for expired_hashes in []):
+            log.info(f"Cleaned up {len(expired_sessions)} expired sessions from OCR cache")
+
+    except Exception as e:
+        log.error(f"Error cleaning up OCR cache: {str(e)}")
+
+
+def get_cached_ocr_result(session_id: str, image_hash: str) -> str:
+    """
+    Récupère un résultat OCR depuis le cache.
+    """
+    try:
+        if session_id in OCR_CACHE:
+            if image_hash in OCR_CACHE[session_id]:
+                result, timestamp = OCR_CACHE[session_id][image_hash]
+                # Vérifier que le cache n'est pas expiré
+                if time.time() - timestamp < CACHE_EXPIRY_SECONDS:
+                    log.info(f"OCR cache hit for image hash {image_hash[:8]}...")
+                    return result
+                else:
+                    # Supprimer l'entrée expirée
+                    del OCR_CACHE[session_id][image_hash]
+
+        return None
+    except Exception as e:
+        log.error(f"Error retrieving cached OCR result: {str(e)}")
+        return None
+
+
+def cache_ocr_result(session_id: str, image_hash: str, ocr_result: str):
+    """
+    Met en cache un résultat OCR.
+    """
+    try:
+        if session_id not in OCR_CACHE:
+            OCR_CACHE[session_id] = {}
+
+        OCR_CACHE[session_id][image_hash] = (ocr_result, time.time())
+        log.info(f"Cached OCR result for image hash {image_hash[:8]}...")
+
+        # Nettoyage périodique (tous les 10 ajouts)
+        if len(OCR_CACHE[session_id]) % 10 == 0:
+            cleanup_expired_cache()
+
+    except Exception as e:
+        log.error(f"Error caching OCR result: {str(e)}")
+
+
+def clear_session_cache(session_id: str):
+    """
+    Nettoie le cache d'une session spécifique.
+    """
+    try:
+        if session_id in OCR_CACHE:
+            del OCR_CACHE[session_id]
+            log.info(f"Cleared OCR cache for session {session_id}")
+    except Exception as e:
+        log.error(f"Error clearing session cache: {str(e)}")
+
+MISTRAL_API_KEY = os.getenv('MISTRAL_API_KEY')
+async def extract_text_with_pixtral(image_content: str, image_format: str = "jpeg") -> str:
+    """
+    Utilise Pixtral pour extraire le texte et décrire l'image.
+    """
+    try:
+        # Configuration - ajustez selon votre setup
+        # Option 1: Votre endpoint EPFL (si Pixtral est disponible)
+        # pixtral_url = "https://inference-dev.rcp.epfl.ch/v1/chat/completions"
+        # pixtral_model = "pixtral-12b"  # ou le nom exact sur votre endpoint
+
+        # Option 2: Mistral API (si vous avez accès)
+        pixtral_url = "https://api.mistral.ai/v1/chat/completions"
+        pixtral_model = "pixtral-12b-2409"
+
+
+        # Option 3: Endpoint local Ollama
+        # pixtral_url = "http://localhost:11434/v1/chat/completions"
+        # pixtral_model = "pixtral"
+
+        image_url = f"data:image/{image_format};base64,{image_content}"
+
+        payload = {
+            "model": pixtral_model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Extract all visible text from this image. Be as accurate as possible and preserve the formatting. If it's a receipt, include all items, prices, and details. Just return the extracted text, no additional commentary."
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": image_url}
+                        }
+                    ]
+                }
+            ],
+            "max_tokens": 1000,
+            "temperature": 0.1
+        }
+
+        headers = {"Content-Type": "application/json"}
+        headers["Authorization"] = f"Bearer {MISTRAL_API_KEY}"
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                    pixtral_url,
+                    json=payload,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=30)
+            ) as response:
+
+                if response.status == 200:
+                    result = await response.json()
+                    extracted_text = result["choices"][0]["message"]["content"]
+                    log.info("Pixtral OCR successful")
+                    return extracted_text.strip()
+                else:
+                    error_text = await response.text()
+                    log.warning(f"Pixtral API error {response.status}: {error_text}")
+                    return None
+
+    except Exception as e:
+        log.warning(f"Pixtral OCR failed: {str(e)}")
+        return None
+
+
+def extract_text_with_tesseract_fallback(image_content: str) -> str:
+    """
+    Fallback avec pytesseract.
+    """
+    try:
+        # Décoder l'image base64
+        image_data = base64.b64decode(image_content)
+
+        # Convertir en PIL Image
+        image = Image.open(io.BytesIO(image_data))
+
+        # Conversion simple en RGB
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+
+        # OCR avec configuration basique
+        custom_config = r'--oem 3 --psm 6'
+        text = pytesseract.image_to_string(image, config=custom_config)
+
+        # Nettoyage basique du texte
+        cleaned_text = ' '.join(text.split())
+
+        return cleaned_text
+
+    except Exception as e:
+        log.error(f"Tesseract OCR failed: {str(e)}")
+        return "[OCR Error: Unable to extract text from image]"
+
+
+async def extract_text_from_image_content_cached(image_content: str, session_id: str,
+                                                 image_format: str = "jpeg") -> str:
+    """
+    Version avec cache qui essaie Pixtral puis fallback vers tesseract.
+    """
+    try:
+        # Générer le hash de l'image
+        image_hash = get_image_hash(image_content)
+
+        # Vérifier le cache d'abord
+        cached_result = get_cached_ocr_result(session_id, image_hash)
+        if cached_result:
+            return cached_result
+
+        # Cache miss - essayer Pixtral d'abord
+        log.info(f"OCR cache miss for image hash {image_hash[:8]}..., trying Pixtral first")
+
+        pixtral_result = await extract_text_with_pixtral(image_content, image_format)
+
+        if pixtral_result and len(pixtral_result.strip()) > 0:
+            # Pixtral a réussi
+            log.info("Using Pixtral OCR result")
+            result_text = pixtral_result
+        else:
+            # Fallback vers tesseract
+            log.info("Pixtral failed, falling back to tesseract")
+            result_text = extract_text_with_tesseract_fallback(image_content)
+
+        # Mettre en cache le résultat
+        cache_ocr_result(session_id, image_hash, result_text)
+
+        return result_text
+
+    except Exception as e:
+        log.error(f"OCR extraction failed: {str(e)}")
+        return "[OCR Error: Unable to extract text from image]"
+
+
+async def extract_images_and_convert_to_text_cached(messages: list, session_id: str) -> list:
+    """
+    Version avec cache qui remplace les images par du texte OCR (async pour supporter Pixtral).
+    """
+    modified_messages = []
+
+    for message in messages:
+        if isinstance(message.get('content'), list):
+            # Message avec contenu mixte (texte + images)
+            text_parts = []
+
+            for content_item in message['content']:
+                if content_item.get('type') == 'text':
+                    text_parts.append(content_item['text'])
+
+                elif content_item.get('type') == 'image_url':
+                    # Extraire l'image et faire l'OCR avec cache
+                    image_url = content_item['image_url']['url']
+
+                    if image_url.startswith('data:image/'):
+                        try:
+                            # Format: data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ...
+                            header, image_content = image_url.split(',', 1)
+                            image_format = header.split('/')[1].split(';')[0]
+
+                            # OCR avec cache (maintenant async)
+                            ocr_text = await extract_text_from_image_content_cached(image_content, session_id,
+                                                                                    image_format)
+
+                            if ocr_text and not ocr_text.startswith("[OCR Error"):
+                                text_parts.append(f"\n[Image Content]: {ocr_text}\n")
+                            else:
+                                text_parts.append("\n[Image: OCR failed]\n")
+
+                        except Exception as e:
+                            log.error(f"Failed to process image: {str(e)}")
+                            text_parts.append("\n[Image: Processing failed]\n")
+
+            # Créer un nouveau message avec seulement du texte
+            modified_message = {
+                'role': message['role'],
+                'content': ' '.join(text_parts) if text_parts else ""
+            }
+            modified_messages.append(modified_message)
+
+        else:
+            # Message texte simple, pas de modification
+            modified_messages.append(message)
+
+    return modified_messages
+
 
 
 async def send_get_request(url, key=None, user: UserModel = None):
@@ -883,6 +1499,100 @@ async def generate_chat_completion(
 
             r.raise_for_status()
             return response
+
+    except aiohttp.ClientResponseError as e:
+
+        log.error(f"HTTP Error {e.status}: {str(e)}")
+        # OCR fallback pour erreurs 400 avec modèles non-multimodaux
+        if e.status == 400 and response and isinstance(response, dict):
+            if (is_multimodal_error(response) and
+                    has_image_content(json.loads(payload).get("messages", []))):
+                log.warning(f"Model doesn't support vision, attempting OCR fallback...")
+                fallback_session = None
+                fallback_r = None
+                try:
+                    # Générer l'ID de session
+                    session_id = get_session_id_from_request(request, user)
+                    # Extraire les images et les convertir en texte avec OCR CACHE
+                    original_messages = json.loads(payload).get("messages", [])
+                    modified_messages = await extract_images_and_convert_to_text_cached(original_messages, session_id)
+                    # Créer un nouveau payload sans images
+
+                    fallback_payload_dict = json.loads(payload)
+                    fallback_payload_dict["messages"] = modified_messages
+                    fallback_payload = json.dumps(fallback_payload_dict)
+                    log.info("OCR conversion completed, retrying request...")
+
+                    # Créer une nouvelle session pour la requête fallback
+
+                    fallback_session = aiohttp.ClientSession(
+                        trust_env=True,
+                        timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT)
+                    )
+
+                    fallback_r = await fallback_session.request(
+                        method="POST",
+                        url=request_url,
+                        data=fallback_payload,
+                        headers=headers,
+                        ssl=AIOHTTP_CLIENT_SESSION_SSL,
+                    )
+                    # Vérifier si la réponse fallback est en streaming
+                    if "text/event-stream" in fallback_r.headers.get("Content-Type", ""):
+                        streaming = True
+                        # Important: nettoyer la session originale avant de retourner
+                        await cleanup_response(r, session)
+                        return StreamingResponse(
+                            fallback_r.content,
+                            status_code=fallback_r.status,
+                            headers=dict(fallback_r.headers),
+                            background=BackgroundTask(
+                                cleanup_response, response=fallback_r, session=fallback_session
+                            ),
+                        )
+                    else:
+                        try:
+                            fallback_response = await fallback_r.json()
+                        except Exception:
+                            fallback_response = await fallback_r.text()
+
+                        fallback_r.raise_for_status()
+
+                        log.info("OCR fallback successful!")
+
+                        # Nettoyer les sessions fallback ET originale
+                        await cleanup_response(fallback_r, fallback_session)
+                        await cleanup_response(r, session)
+
+                        return fallback_response
+
+                except Exception as fallback_e:
+                    log.error(f"OCR fallback request failed: {str(fallback_e)}")
+                    # Nettoyer les sessions fallback si elles existent
+                    if fallback_session:
+                        await cleanup_response(fallback_r, fallback_session)
+                    # Continuer avec l'erreur originale
+
+                except Exception as ocr_error:
+                    log.error(f"OCR processing failed: {str(ocr_error)}")
+                    # Continuer avec l'erreur originale
+
+        # Gestion d'erreur originale
+        detail = None
+        if isinstance(response, dict):
+            if "error" in response:
+                detail = f"{response['error']['message'] if 'message' in response['error'] else response['error']}"
+        elif isinstance(response, str):
+            if response.strip().startswith("<html") or response.strip().startswith("<!DOCTYPE html"):
+                detail = "Model is currently loading. Please wait a few minutes and try again."
+            else:
+                detail = response
+
+        raise HTTPException(
+            status_code=e.status,
+            detail=detail if detail else "Open WebUI: Server Connection Error",
+        )
+
     except Exception as e:
         log.exception(e)
 
@@ -892,7 +1602,6 @@ async def generate_chat_completion(
                 detail = f"{response['error']['message'] if 'message' in response['error'] else response['error']}"
         elif isinstance(response, str):
             if response.strip().startswith("<html") or response.strip().startswith("<!DOCTYPE html"):
-                # This is likely HTML from a model loading state
                 detail = "Model is currently loading. Please wait a few minutes and try again."
             else:
                 detail = response
@@ -902,6 +1611,7 @@ async def generate_chat_completion(
             detail=detail if detail else "Open WebUI: Server Connection Error",
         )
     finally:
+        # Nettoyer seulement si pas de streaming (car le background task s'en charge)
         if not streaming:
             await cleanup_response(r, session)
 
