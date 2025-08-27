@@ -201,7 +201,6 @@ def upload_file(
 
         if file_item:
             log.info(f"File {file_item.id} uploaded successfully")
-            log.info(file_item)
             return file_item
         else:
             raise HTTPException(

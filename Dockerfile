@@ -31,8 +31,8 @@ WORKDIR /app
 # to store git revision in build
 RUN apk add --no-cache git
 
-COPY package.json package-lock.json ./
-RUN npm ci --force
+COPY package.json ./
+RUN npm install
 
 COPY . .
 ENV APP_BUILD_HASH=${BUILD_HASH}

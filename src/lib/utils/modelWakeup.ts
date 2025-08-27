@@ -1,5 +1,3 @@
-// modelWakeup.ts - Optimized version with minimal data transfer
-
 import { get } from 'svelte/store';
 import { toast } from 'svelte-sonner';
 import { modelsLoaded } from '$lib/stores';
@@ -10,6 +8,7 @@ interface Model {
   id: string;
   info?: {
     base_model_id?: string;
+    [key: string]: any; // Allow other properties
   };
 }
 
@@ -23,7 +22,11 @@ const SSE_TIMEOUT = 600 * 1000; // 10 minutes
 
 // State management
 const modelLastActivity = new Map<string, number>();
-const activeWakeups = new Set<string>();
+//
+// CHANGE: Use a Map to store in-flight promises instead of a Set of active IDs.
+// This is the core of the fix.
+//
+const activeWakeupPromises = new Map<string, Promise<boolean>>();
 
 /**
  * Resolve the actual model ID (handles base models)
@@ -31,8 +34,20 @@ const activeWakeups = new Set<string>();
 export const resolveActualModelId = (modelId: string, models: Model[]): string => {
   const model = models.find(m => m.id === modelId);
   const actualId = model?.info?.base_model_id || modelId;
-  console.log(`Resolving model ID: ${modelId} -> ${actualId}`);
+  // Reduced logging to avoid console spam
+  if (modelId !== actualId) {
+    console.log(`Resolving model ID: ${modelId} -> ${actualId}`);
+  }
   return actualId;
+};
+
+/**
+ * Create minimal models_info object with only necessary fields
+ */
+const createMinimalModelsInfo = (modelId: string, models: Model[]): Record<string, { info: { base_model_id?: string } }> => {
+  const model = models.find(m => m.id === modelId);
+  const minimalInfo = model && model.info?.base_model_id ? { base_model_id: model.info.base_model_id } : {};
+  return { [modelId]: { info: minimalInfo } };
 };
 
 /**
@@ -57,12 +72,9 @@ export const needsModelCheck = (modelId: string, models: Model[]): boolean => {
  */
 export const checkModelAvailability = async (modelId: string, models?: Model[]): Promise<boolean> => {
   try {
-    // Only send info for the specific model being checked, not all models
-    const model = models?.find(m => m.id === modelId);
-    const modelInfo = model ? { [modelId]: { info: model.info || {} } } : {};
-
+    const minimalModelsInfo = models ? createMinimalModelsInfo(modelId, models) : {};
     const response = await fetch(
-      `${WEBUI_API_BASE_URL}/utils/check_model_availability/${encodeURIComponent(modelId)}?models_info=${encodeURIComponent(JSON.stringify(modelInfo))}`,
+      `${WEBUI_API_BASE_URL}/utils/check_model_availability/${encodeURIComponent(modelId)}?models_info=${encodeURIComponent(JSON.stringify(minimalModelsInfo))}`,
       {
         method: 'GET',
         headers: {
@@ -71,7 +83,6 @@ export const checkModelAvailability = async (modelId: string, models?: Model[]):
         }
       }
     );
-
     if (response.ok) {
       const data = await response.json();
       return data.available;
@@ -79,13 +90,11 @@ export const checkModelAvailability = async (modelId: string, models?: Model[]):
   } catch (error) {
     console.error(`Error checking model availability for ${modelId}:`, error);
   }
-
-  // If we can't check, assume available to not block users
-  return true;
+  return true; // Assume available if check fails
 };
 
 /**
- * Wake up models using SSE - RESTORED with minimal data
+ * Wake up models using SSE - REFACTORED to be non-blocking
  */
 export const ensureModelsAwakeSSE = async (
   chatModel: string,
@@ -96,154 +105,136 @@ export const ensureModelsAwakeSSE = async (
   const { quiet = false } = options;
   const actualModelId = resolveActualModelId(chatModel, models);
 
-  // Check if already waking up
-  if (activeWakeups.has(actualModelId)) {
-    console.log(`Model ${actualModelId} is already being woken up`);
-    return false;
-  }
-
-  // Check if model is already loaded
-  const currentState = get(modelsLoaded);
-  if (currentState[actualModelId] === true) {
-    console.log(`Model ${actualModelId} is already loaded`);
+  // 1. Check if model is already loaded in the store
+  if (get(modelsLoaded)[actualModelId] === true) {
     return true;
   }
 
-  // Mark as being woken up
-  activeWakeups.add(actualModelId);
+  // 2. CHANGE: Check if a wake-up promise already exists for this model.
+  // If so, return the existing promise instead of creating a new one.
+  if (activeWakeupPromises.has(actualModelId)) {
+    console.log(`A wake-up call for ${actualModelId} is already in progress. Awaiting its completion.`);
+    return activeWakeupPromises.get(actualModelId)!;
+  }
 
-  try {
-    return await new Promise((resolve) => {
-      let loadingToast: any = null;
-      let resolved = false;
+  // 3. Create a new promise for the wake-up process.
+  const wakeupPromise = new Promise<boolean>((resolve) => {
+    let loadingToast: any = null;
 
-      const cleanup = () => {
-        activeWakeups.delete(actualModelId);
-        if (loadingToast && !quiet) toast.dismiss(loadingToast);
-        if (!resolved) {
-          resolved = true;
-          resolve(false);
+    const cleanupAndResolve = (result: boolean) => {
+      if (loadingToast && !quiet) toast.dismiss(loadingToast);
+      resolve(result);
+    };
+
+    const timeout = setTimeout(() => {
+        console.error(`SSE timeout reached for model ${actualModelId}`);
+        if (!quiet) {
+            if (loadingToast) toast.dismiss(loadingToast);
+            toast.error(i18n.t('Model loading timed out.'));
+        }
+        cleanupAndResolve(false);
+    }, SSE_TIMEOUT);
+
+    const minimalModelsInfo = createMinimalModelsInfo(chatModel, models);
+    console.log(`Starting new wake-up call for ${actualModelId}`);
+
+    fetch(`${WEBUI_API_BASE_URL}/utils/wake_up_models_sse`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${localStorage.token}`,
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache'
+      },
+      body: JSON.stringify({
+        chat_model: chatModel,
+        models_info: minimalModelsInfo
+      })
+    })
+    .then(response => {
+      if (!response.ok) {
+        throw new Error(`HTTP error ${response.status}`);
+      }
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('No response body reader');
+      }
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      const processStream = async () => {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            console.warn(`SSE stream for ${actualModelId} ended without a 'complete' event.`);
+            break;
+          }
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                switch (data.type) {
+                  case 'acknowledged':
+                    if (!quiet) loadingToast = toast.loading(i18n.t('Checking model status...'));
+                    break;
+                  case 'status':
+                    if (!quiet && data.models?.chat_model?.status === 'loading') {
+                      if (loadingToast) toast.dismiss(loadingToast);
+                      loadingToast = toast.loading(i18n.t('Loading model...'));
+                    }
+                    break;
+                  case 'complete':
+                    clearTimeout(timeout);
+                    if (!quiet) {
+                      if (loadingToast) toast.dismiss(loadingToast);
+                      toast.success(i18n.t('Model is ready!'));
+                    }
+                    modelsLoaded.update(state => ({ ...state, [actualModelId]: true }));
+                    updateLastInteractionTime(actualModelId, models);
+                    cleanupAndResolve(true);
+                    return; // Exit processing loop
+                  case 'timeout':
+                  case 'error':
+                    clearTimeout(timeout);
+                    if (!quiet) {
+                      if (loadingToast) toast.dismiss(loadingToast);
+                      toast.error(data.message || i18n.t('Failed to load model'));
+                    }
+                    cleanupAndResolve(false);
+                    return; // Exit processing loop
+                }
+              } catch (e) { /* Ignore parsing errors for malformed SSE data */ }
+            }
+          }
         }
       };
-
-      // Set a timeout
-      const timeout = setTimeout(() => {
-        console.error('SSE timeout reached');
-        cleanup();
-      }, SSE_TIMEOUT);
-
-      // Create minimal models info - ONLY for the specific model being woken up
-      const model = models.find(m => m.id === chatModel);
-      const minimalModelsInfo = model ? { [chatModel]: { info: model.info || {} } } : {};
-
-      console.log('Minimal models_info size:', JSON.stringify(minimalModelsInfo).length, 'chars');
-
-      // Create SSE request with minimal data
-      fetch(`${WEBUI_API_BASE_URL}/utils/wake_up_models_sse`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.token}`,
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache'
-        },
-        body: JSON.stringify({
-          chat_model: chatModel,
-          embedding_model: "Linq-AI-Research/Linq-Embed-Mistral",
-          reranker_model: "BAAI/bge-reranker-v2-m3",
-          force: false,
-          models_info: minimalModelsInfo  // ← Only the specific model, not all models!
-        })
-      })
-      .then(response => {
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-
-        const reader = response.body?.getReader();
-        if (!reader) {
-          throw new Error('No response body');
-        }
-
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        const processStream = async () => {
-          try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-
-              buffer += decoder.decode(value, { stream: true });
-              const lines = buffer.split('\n');
-              buffer = lines.pop() || '';
-
-              for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                  try {
-                    const data = JSON.parse(line.slice(6));
-
-                    switch (data.type) {
-                      case 'acknowledged':
-                        if (!quiet) {
-                          loadingToast = toast.loading(i18n.t('Checking model status...'));
-                        }
-                        break;
-
-                      case 'status':
-                        if (!quiet && data.models?.chat_model?.status === 'loading') {
-                          if (loadingToast) toast.dismiss(loadingToast);
-                          loadingToast = toast.loading(i18n.t('Loading model...'));
-                        }
-                        break;
-
-                      case 'complete':
-                        clearTimeout(timeout);
-                        if (!quiet) {
-                          if (loadingToast) toast.dismiss(loadingToast);
-                          toast.success(i18n.t('Model is ready!'));
-                        }
-                        modelsLoaded.update(state => ({ ...state, [actualModelId]: true }));
-                        updateLastInteractionTime(actualModelId, models);
-                        activeWakeups.delete(actualModelId);
-                        resolved = true;
-                        resolve(true);
-                        return;
-
-                      case 'timeout':
-                      case 'error':
-                        clearTimeout(timeout);
-                        if (!quiet) {
-                          if (loadingToast) toast.dismiss(loadingToast);
-                          toast.error(data.message || i18n.t('Failed to load model'));
-                        }
-                        cleanup();
-                        return;
-                    }
-                  } catch (e) {
-                    console.error('Error parsing SSE data:', e);
-                  }
-                }
-              }
-            }
-          } catch (error) {
-            console.error('Stream processing error:', error);
-            cleanup();
-          }
-        };
-
-        processStream();
-      })
-      .catch(error => {
+      processStream().catch(error => {
         clearTimeout(timeout);
-        console.error('SSE request failed:', error);
-        if (!quiet) toast.error(i18n.t('Failed to connect to server'));
-        cleanup();
+        console.error('SSE stream processing error:', error);
+        cleanupAndResolve(false);
       });
+    })
+    .catch(error => {
+      clearTimeout(timeout);
+      console.error('SSE fetch request failed:', error);
+      if (!quiet) toast.error(i18n.t('Failed to connect to server'));
+      cleanupAndResolve(false);
     });
-  } catch (error) {
-    activeWakeups.delete(actualModelId);
-    throw error;
-  }
+  });
+
+  // 4. Store the new promise in the map.
+  activeWakeupPromises.set(actualModelId, wakeupPromise);
+
+  // 5. Use .finally() to ensure the promise is removed from the map
+  //    whether it resolves to true or false.
+  wakeupPromise.finally(() => {
+    activeWakeupPromises.delete(actualModelId);
+  });
+
+  // 6. Return the promise to the caller.
+  return wakeupPromise;
 };
 
 /**
@@ -308,6 +299,7 @@ export const cleanupModelsLoaded = (selectedModels: string[], models: Model[]): 
 /**
  * Check if a model should be woken up
  */
+
 export const shouldWakeUpModel = (modelId: string, models: Model[]): boolean => {
   const actualModelId = resolveActualModelId(modelId, models);
   const currentState = get(modelsLoaded);
@@ -315,8 +307,8 @@ export const shouldWakeUpModel = (modelId: string, models: Model[]): boolean => 
   // Already loaded
   if (currentState[actualModelId] === true) return false;
 
-  // Already being woken up
-  if (activeWakeups.has(actualModelId)) return false;
+  // Check the new map for an in-progress promise
+  if (activeWakeupPromises.has(actualModelId)) return false;
 
   return true;
 };

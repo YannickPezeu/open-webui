@@ -424,6 +424,7 @@ import {
 
 	let user = null;
 	export let placeholder = '';
+    let checkingModels = false;
 
 	let visionCapableModels = [];
 	$: visionCapableModels = (atSelectedModel?.id ? [atSelectedModel.id] : selectedModels).filter(
@@ -835,6 +836,80 @@ import {
 			dropzoneElement?.removeEventListener('dragleave', onDragLeave);
 		}
 	});
+
+	// Component state wakeup
+
+	// Clean up models when selection changes
+	$: if (selectedModels.length > 0) {
+	  cleanupModelsLoaded(selectedModels, $models);
+	}
+
+	// Wake up models when they are selected
+	$: {
+	  if ($models.length > 0 && selectedModelIds.length > 0) {
+		selectedModelIds.forEach(async (modelId) => {
+		  if (modelId && shouldWakeUpModel(modelId, $models)) {
+			await wakeUpModel(modelId, $models, $i18n);
+		  }
+		});
+	  }
+	}
+
+// src/lib/components/chat/MessageInput.svelte
+
+const handleSubmit = async () => {
+  // Return early if there's no input
+  if (prompt === '' && files.length === 0) {
+    return;
+  }
+
+  // Step 1: Determine the target models for THIS submission.
+  // If @mentioning a model, that's the only target.
+  // Otherwise, the targets are all currently selected models.
+  const targetModelIds = (atSelectedModel ? [atSelectedModel.id] : selectedModels).filter(id => id);
+
+  // Check if any models are targeted
+  if (targetModelIds.length === 0) {
+    toast.error($i18n.t('Please select a model first.'));
+    return;
+  }
+
+  // Step 2: Check if all TARGET models are loaded.
+  // This loop ensures that for a multi-model message, all targets must be ready.
+  // For a single-model message, it only checks that one.
+  for (const modelId of targetModelIds) {
+    const actualModelId = resolveActualModelId(modelId, $models);
+    const isAvailable = await checkModelAvailability(modelId, $models);
+
+    // Skip unavailable models, as they can't be loaded anyway.
+    if (!isAvailable) continue;
+
+    // If an available model is not marked as loaded, block the submission.
+    if (!$modelsLoaded[actualModelId]) {
+      toast.info($i18n.t('Models are still loading, please wait...'));
+      return;
+    }
+  }
+
+  // Step 3: Perform a final "wake-up" check on the primary target model.
+  // This handles cases where a model might have gone to sleep since being loaded.
+  const primaryTargetModel = targetModelIds[0];
+  if (needsModelCheck(primaryTargetModel, $models)) {
+    checkingModels = true;
+    const modelsReady = await ensureModelsAwakeSSE(primaryTargetModel, $models, $i18n);
+    checkingModels = false;
+    if (!modelsReady) {
+      return;
+    }
+  }
+
+  // Step 4: Update activity time for all targets and send the message.
+  targetModelIds.forEach(modelId => {
+    updateLastInteractionTime(modelId, $models);
+  });
+
+  dispatch('submit', prompt);
+};
 </script>
 
 <FilesOverlay show={dragged} />

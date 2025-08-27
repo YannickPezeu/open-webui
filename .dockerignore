@@ -29,3 +29,4 @@ env
 # Add this to your .dockerignore file
 backend/venv_py311/
 .git/
+package-lock.json

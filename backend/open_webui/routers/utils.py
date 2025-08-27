@@ -138,9 +138,11 @@ async def download_litellm_config_yaml(user=Depends(get_admin_user)):
 
 # Configuration
 API_KEY = os.getenv("OPENAI_API_KEY")
-API_ENDPOINT = os.getenv("OPENAI_API_BASE_URL", "https://inference-dev.rcp.epfl.ch/v1")
+API_ENDPOINT = os.getenv("OPENAI_API_BASE_URL", "https://inference.rcp.epfl.ch/v1")
 WAKEUP_INTERVAL = 15 * 60  # 15 minutes in seconds
 TASK_TIMEOUT = 300  # 5 minutes max per wake-up task
+EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "Linq-AI-Research/Linq-Embed-Mistral")
+RERANKER_MODEL = os.getenv("OPENAI_RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
 
 # Global state
 model_last_activity: Dict[str, float] = {}
@@ -150,8 +152,8 @@ wakeup_lock = asyncio.Lock()
 
 class WakeUpModelsRequest(BaseModel):
     chat_model: str
-    embedding_model: Optional[str] = "Linq-AI-Research/Linq-Embed-Mistral"
-    reranker_model: Optional[str] = "BAAI/bge-reranker-v2-m3"
+    embedding_model: Optional[str] = EMBEDDING_MODEL
+    reranker_model: Optional[str] = RERANKER_MODEL
     force: Optional[bool] = False
     models_info: Optional[dict] = {}  # Now minimal - only specific model info
 
@@ -163,6 +165,9 @@ async def wake_up_models_sse(request: WakeUpModelsRequest, user=Depends(get_veri
     Optimized to handle minimal models_info payload.
     """
 
+    # Store models that this specific request will attempt to wake up
+    models_this_request_will_manage = set()
+
     async def event_generator():
         try:
             # Log payload size for monitoring
@@ -171,14 +176,13 @@ async def wake_up_models_sse(request: WakeUpModelsRequest, user=Depends(get_veri
 
             yield f"data: {json.dumps({'type': 'acknowledged', 'message': 'Starting model check...'})}\n\n"
 
-            # Resolve actual model IDs using minimal info
+            # Resolve actual model IDs
             actual_chat_model = resolve_actual_model_id(request.chat_model, request.models_info)
             actual_embedding_model = resolve_actual_model_id(request.embedding_model, request.models_info)
             actual_reranker_model = resolve_actual_model_id(request.reranker_model, request.models_info)
 
             log.info(f"Model ID mapping: {request.chat_model} -> {actual_chat_model}")
 
-            # Check which models need wake-up
             models_to_wake = await get_models_needing_wakeup(
                 actual_chat_model,
                 actual_embedding_model,
@@ -190,78 +194,70 @@ async def wake_up_models_sse(request: WakeUpModelsRequest, user=Depends(get_veri
                 yield f"data: {json.dumps({'type': 'complete', 'message': 'All models ready', 'models': {'chat_model': {'status': 'awake'}, 'embedding_model': {'status': 'awake'}, 'reranker_model': {'status': 'awake'}}})}\n\n"
                 return
 
-            # Wake up models that need it
+            tasks = []
             async with wakeup_lock:
-                tasks = []
+                if 'chat' in models_to_wake and actual_chat_model not in active_wakeup_tasks:
+                    active_wakeup_tasks.add(actual_chat_model)
+                    models_this_request_will_manage.add(actual_chat_model)  # Track for cleanup
+                    task = asyncio.create_task(wake_chat_model(actual_chat_model))
+                    tasks.append(('chat', actual_chat_model, task))
 
-                if 'chat' in models_to_wake:
-                    if actual_chat_model not in active_wakeup_tasks:
-                        active_wakeup_tasks.add(actual_chat_model)
-                        task = asyncio.create_task(wake_chat_model(actual_chat_model))
-                        tasks.append(('chat', actual_chat_model, task))
+                if 'embedding' in models_to_wake and actual_embedding_model not in active_wakeup_tasks:
+                    active_wakeup_tasks.add(actual_embedding_model)
+                    models_this_request_will_manage.add(actual_embedding_model)  # Track for cleanup
+                    task = asyncio.create_task(wake_embedding_model(actual_embedding_model))
+                    tasks.append(('embedding', actual_embedding_model, task))
 
-                if 'embedding' in models_to_wake:
-                    if actual_embedding_model not in active_wakeup_tasks:
-                        active_wakeup_tasks.add(actual_embedding_model)
-                        task = asyncio.create_task(wake_embedding_model(actual_embedding_model))
-                        tasks.append(('embedding', actual_embedding_model, task))
+                if 'reranker' in models_to_wake and actual_reranker_model not in active_wakeup_tasks:
+                    active_wakeup_tasks.add(actual_reranker_model)
+                    models_this_request_will_manage.add(actual_reranker_model)  # Track for cleanup
+                    task = asyncio.create_task(wake_reranker_model(actual_reranker_model))
+                    tasks.append(('reranker', actual_reranker_model, task))
 
-                if 'reranker' in models_to_wake:
-                    if actual_reranker_model not in active_wakeup_tasks:
-                        active_wakeup_tasks.add(actual_reranker_model)
-                        task = asyncio.create_task(wake_reranker_model(actual_reranker_model))
-                        tasks.append(('reranker', actual_reranker_model, task))
+            if not tasks:
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Models are already being woken up by another process.'})}\n\n"
+                # It's better to wait and stream status rather than just ending here
+                # The monitoring loop below will handle this scenario gracefully.
 
-            # Monitor wake-up progress
             start_time = time.time()
-            max_wait = 600  # 10 minutes
+            max_wait = 600
 
             while tasks and time.time() - start_time < max_wait:
+                # ... (monitoring loop is the same)
                 status = {}
-                all_ready = True
+                done_tasks_indices = []
 
-                for task_type, model_id, task in tasks:
+                for i, (task_type, model_id, task) in enumerate(tasks):
                     if task.done():
+                        done_tasks_indices.append(i)
                         try:
                             result = task.result()
-                            status[f"{task_type}_model"] = {
-                                'name': model_id,
-                                'status': 'awake' if result else 'failed'
-                            }
+                            status[f"{task_type}_model"] = {'name': model_id, 'status': 'awake' if result else 'failed'}
                         except Exception as e:
-                            status[f"{task_type}_model"] = {
-                                'name': model_id,
-                                'status': 'failed',
-                                'error': str(e)
-                            }
-                    else:
-                        status[f"{task_type}_model"] = {
-                            'name': model_id,
-                            'status': 'loading'
-                        }
-                        all_ready = False
+                            status[f"{task_type}_model"] = {'name': model_id, 'status': 'failed', 'error': str(e)}
+
+                # Create a new list of tasks without the completed ones
+                tasks = [t for i, t in enumerate(tasks) if i not in done_tasks_indices]
 
                 yield f"data: {json.dumps({'type': 'status', 'models': status, 'elapsed': int(time.time() - start_time)})}\n\n"
 
-                if all_ready:
-                    # Clean up completed tasks
-                    for _, model_id, _ in tasks:
-                        active_wakeup_tasks.discard(model_id)
-
+                if not tasks:
                     yield f"data: {json.dumps({'type': 'complete', 'message': 'All models ready', 'models': status})}\n\n"
                     return
 
                 await asyncio.sleep(3)
 
-            # Timeout
-            for _, model_id, _ in tasks:
-                active_wakeup_tasks.discard(model_id)
-
             yield f"data: {json.dumps({'type': 'timeout', 'message': 'Some models may still be loading'})}\n\n"
 
         except Exception as e:
-            log.error(f"SSE error: {e}")
+            log.error(f"SSE error: {e}", exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        finally:
+            # CHANGE: This `finally` block guarantees cleanup.
+            log.info(f"Cleaning up SSE request. Removing models from active tasks: {models_this_request_will_manage}")
+            for model_id in models_this_request_will_manage:
+                active_wakeup_tasks.discard(model_id)
+            log.info(f"Active tasks remaining: {active_wakeup_tasks}")
 
     return StreamingResponse(
         event_generator(),
@@ -272,7 +268,6 @@ async def wake_up_models_sse(request: WakeUpModelsRequest, user=Depends(get_veri
             "X-Accel-Buffering": "no",
         }
     )
-
 
 @router.post("/wake_up_models")
 async def wake_up_models_simple(request: WakeUpModelsRequest, user=Depends(get_verified_user)):
@@ -288,8 +283,8 @@ async def wake_up_models_simple(request: WakeUpModelsRequest, user=Depends(get_v
     # Check if models need wake-up
     models_to_wake = await get_models_needing_wakeup(
         actual_chat_model,
-        request.embedding_model or "Linq-AI-Research/Linq-Embed-Mistral",
-        request.reranker_model or "BAAI/bge-reranker-v2-m3",
+        request.embedding_model or EMBEDDING_MODEL,
+        request.reranker_model or RERANKER_MODEL,
         request.force or False
     )
 
