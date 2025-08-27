@@ -51,6 +51,7 @@ import {
 		extractContentFromFile,
 		extractCurlyBraceWords,
 		extractInputVariables,
+		getAge,
 		getCurrentDateTime,
 		getFormattedDate,
 		getFormattedTime,
@@ -87,6 +88,7 @@ import {
 	import { KokoroWorker } from '$lib/workers/KokoroWorker';
 	import InputVariablesModal from './MessageInput/InputVariablesModal.svelte';
 	import Voice from '../icons/Voice.svelte';
+	import { getSessionUser } from '$lib/apis/auths';
 	const i18n = getContext('i18n');
 
 	export let onChange: Function = () => {};
@@ -207,9 +209,45 @@ import {
 			text = text.replaceAll('{{USER_LOCATION}}', String(location));
 		}
 
+		const sessionUser = await getSessionUser(localStorage.token);
+
 		if (text.includes('{{USER_NAME}}')) {
-			const name = $_user?.name || 'User';
+			const name = sessionUser?.name || 'User';
 			text = text.replaceAll('{{USER_NAME}}', name);
+		}
+
+		if (text.includes('{{USER_BIO}}')) {
+			const bio = sessionUser?.bio || '';
+
+			if (bio) {
+				text = text.replaceAll('{{USER_BIO}}', bio);
+			}
+		}
+
+		if (text.includes('{{USER_GENDER}}')) {
+			const gender = sessionUser?.gender || '';
+
+			if (gender) {
+				text = text.replaceAll('{{USER_GENDER}}', gender);
+			}
+		}
+
+		if (text.includes('{{USER_BIRTH_DATE}}')) {
+			const birthDate = sessionUser?.date_of_birth || '';
+
+			if (birthDate) {
+				text = text.replaceAll('{{USER_BIRTH_DATE}}', birthDate);
+			}
+		}
+
+		if (text.includes('{{USER_AGE}}')) {
+			const birthDate = sessionUser?.date_of_birth || '';
+
+			if (birthDate) {
+				// calculate age using date
+				const age = getAge(birthDate);
+				text = text.replaceAll('{{USER_AGE}}', age);
+			}
 		}
 
 		if (text.includes('{{USER_LANGUAGE}}')) {
@@ -877,36 +915,36 @@ const handleSubmit = async () => {
   // Step 2: Check if all TARGET models are loaded.
   // This loop ensures that for a multi-model message, all targets must be ready.
   // For a single-model message, it only checks that one.
-  for (const modelId of targetModelIds) {
-    const actualModelId = resolveActualModelId(modelId, $models);
-    const isAvailable = await checkModelAvailability(modelId, $models);
+//   for (const modelId of targetModelIds) {
+//     const actualModelId = resolveActualModelId(modelId, $models);
+//     const isAvailable = await checkModelAvailability(modelId, $models);
 
-    // Skip unavailable models, as they can't be loaded anyway.
-    if (!isAvailable) continue;
+//     // Skip unavailable models, as they can't be loaded anyway.
+//     if (!isAvailable) continue;
 
-    // If an available model is not marked as loaded, block the submission.
-    if (!$modelsLoaded[actualModelId]) {
-      toast.info($i18n.t('Models are still loading, please wait...'));
-      return;
-    }
-  }
+//     // If an available model is not marked as loaded, block the submission.
+//     if (!$modelsLoaded[actualModelId]) {
+//       toast.info($i18n.t('Models are still loading, please wait...'));
+//       return;
+//     }
+//   }
 
   // Step 3: Perform a final "wake-up" check on the primary target model.
   // This handles cases where a model might have gone to sleep since being loaded.
-  const primaryTargetModel = targetModelIds[0];
-  if (needsModelCheck(primaryTargetModel, $models)) {
-    checkingModels = true;
-    const modelsReady = await ensureModelsAwakeSSE(primaryTargetModel, $models, $i18n);
-    checkingModels = false;
-    if (!modelsReady) {
-      return;
-    }
-  }
+//   const primaryTargetModel = targetModelIds[0];
+//   if (needsModelCheck(primaryTargetModel, $models)) {
+//     checkingModels = true;
+//     const modelsReady = await ensureModelsAwakeSSE(primaryTargetModel, $models, $i18n);
+//     checkingModels = false;
+//     if (!modelsReady) {
+//       return;
+//     }
+//   }
 
   // Step 4: Update activity time for all targets and send the message.
-  targetModelIds.forEach(modelId => {
-    updateLastInteractionTime(modelId, $models);
-  });
+//   targetModelIds.forEach(modelId => {
+//     updateLastInteractionTime(modelId, $models);
+//   });
 
   dispatch('submit', prompt);
 };
@@ -978,7 +1016,8 @@ const handleSubmit = async () => {
 												: `${WEBUI_BASE_URL}/static/favicon.png`)}
 									/>
 									<div class="translate-y-[0.5px]">
-										Talking to <span class=" font-medium">{atSelectedModel.name}</span>
+										{$i18n.t('Talk to model')}:
+										<span class=" font-medium">{atSelectedModel.name}</span>
 									</div>
 								</div>
 								<div>
@@ -1233,7 +1272,20 @@ const handleSubmit = async () => {
 														return res;
 													}}
 													oncompositionstart={() => (isComposing = true)}
-													oncompositionend={() => (isComposing = false)}
+													oncompositionend={() => {
+														const isSafari = /^((?!chrome|android).)*safari/i.test(
+															navigator.userAgent
+														);
+
+														if (isSafari) {
+															// Safari has a bug where compositionend is not triggered correctly #16615
+															// when using the virtual keyboard on iOS.
+															// We use a timeout to ensure that the composition is ended after a short delay.
+															setTimeout(() => (isComposing = false));
+														} else {
+															isComposing = false;
+														}
+													}}
 													on:keydown={async (e) => {
 														e = e.detail.event;
 
@@ -1443,7 +1495,18 @@ const handleSubmit = async () => {
 												command = getCommand();
 											}}
 											on:compositionstart={() => (isComposing = true)}
-											on:compositionend={() => (isComposing = false)}
+											on:compositionend={() => {
+												const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+
+												if (isSafari) {
+													// Safari has a bug where compositionend is not triggered correctly #16615
+													// when using the virtual keyboard on iOS.
+													// We use a timeout to ensure that the composition is ended after a short delay.
+													setTimeout(() => (isComposing = false));
+												} else {
+													isComposing = false;
+												}
+											}}
 											on:keydown={async (e) => {
 												const isCtrlPressed = e.ctrlKey || e.metaKey; // metaKey is for Cmd key on Mac
 

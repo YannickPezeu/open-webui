@@ -55,7 +55,7 @@ from open_webui.env import (
 router = APIRouter()
 
 # Constants
-MAX_FILE_SIZE_MB = 3
+MAX_FILE_SIZE_MB = 20
 MAX_FILE_SIZE = MAX_FILE_SIZE_MB * 1024 * 1024  # Convert MB to bytes
 AZURE_MAX_FILE_SIZE_MB = 200
 AZURE_MAX_FILE_SIZE = AZURE_MAX_FILE_SIZE_MB * 1024 * 1024  # Convert MB to bytes
@@ -82,9 +82,6 @@ def is_audio_conversion_required(file_path):
     Check if the given audio file needs conversion to mp3.
     """
     SUPPORTED_FORMATS = {"flac", "m4a", "mp3", "mp4", "mpeg", "wav", "webm"}
-
-    log.info(f"Checking if audio conversion is required for file: {file_path}")
-
 
     if not os.path.isfile(file_path):
         log.error(f"File not found: {file_path}")
@@ -546,13 +543,17 @@ async def speech(request: Request, user=Depends(get_verified_user)):
         return FileResponse(file_path)
 
 
-
 def transcription_handler(request, file_path, metadata):
     filename = os.path.basename(file_path)
     file_dir = os.path.dirname(file_path)
     id = filename.split(".")[0]
 
     metadata = metadata or {}
+
+    languages = [
+        metadata.get("language", None) if WHISPER_LANGUAGE == "" else WHISPER_LANGUAGE,
+        None,  # Always fallback to None in case transcription fails
+    ]
 
     if request.app.state.config.STT_ENGINE == "":
         if request.app.state.faster_whisper_model is None:
@@ -565,11 +566,7 @@ def transcription_handler(request, file_path, metadata):
             file_path,
             beam_size=5,
             vad_filter=request.app.state.config.WHISPER_VAD_FILTER,
-            language=(
-                metadata.get("language", None)
-                if WHISPER_LANGUAGE == ""
-                else WHISPER_LANGUAGE
-            ),
+            language=languages[0],
         )
         log.info(
             "Detected language '%s' with probability %f"
@@ -589,54 +586,26 @@ def transcription_handler(request, file_path, metadata):
     elif request.app.state.config.STT_ENGINE == "openai":
         r = None
         try:
-            r = requests.post(
-                url=f"{request.app.state.config.STT_OPENAI_API_BASE_URL}/audio/transcriptions",
-                headers={
-                    "Authorization": f"Bearer {request.app.state.config.STT_OPENAI_API_KEY}"
-                },
-                files={"file": (filename, open(file_path, "rb"))},
-                data={
+            for language in languages:
+                payload = {
                     "model": request.app.state.config.STT_MODEL,
-                    **(
-                        {"language": metadata.get("language")}
-                        if metadata.get("language")
-                        else {}
-                    ),
-                },
-            )
-            # Enhanced error handling with detailed OpenAI response
-            if r.status_code != 200:
-                log.error(f"OpenAI API returned status {r.status_code} for file {filename}")
-                log.error(f"Response headers: {dict(r.headers)}")
-                log.error(f"Response content: {r.text}")
+                }
 
-                # Try to parse the error response
-                try:
-                    error_data = r.json()
-                    if "error" in error_data:
-                        error_msg = error_data["error"].get("message", "Unknown error")
-                        error_type = error_data["error"].get("type", "unknown_error")
-                        error_code = error_data["error"].get("code", "unknown_code")
+                if language:
+                    payload["language"] = language
 
-                        log.error(f"OpenAI Error - Type: {error_type}, Code: {error_code}, Message: {error_msg}")
+                r = requests.post(
+                    url=f"{request.app.state.config.STT_OPENAI_API_BASE_URL}/audio/transcriptions",
+                    headers={
+                        "Authorization": f"Bearer {request.app.state.config.STT_OPENAI_API_KEY}"
+                    },
+                    files={"file": (filename, open(file_path, "rb"))},
+                    data=payload,
+                )
 
-                        # More specific error handling based on OpenAI error types
-                        if error_type == "invalid_request_error":
-                            if "file format" in error_msg.lower() or "format" in error_msg.lower():
-                                detail = f"External: Invalid audio format - {error_msg}"
-                            elif "file size" in error_msg.lower() or "size" in error_msg.lower():
-                                detail = f"External: File size issue - {error_msg}"
-                            else:
-                                detail = f"External: Invalid request - {error_msg}"
-                        else:
-                            detail = f"External: {error_msg}"
-                    else:
-                        detail = f"External: HTTP {r.status_code} - {r.text}"
-                except Exception as parse_error:
-                    log.error(f"Could not parse error response: {parse_error}")
-                    detail = f"External: HTTP {r.status_code} - {r.text}"
-
-                raise Exception(detail)
+                if r.status_code == 200:
+                    # Successful transcription
+                    break
 
             r.raise_for_status()
             data = r.json()
@@ -678,18 +647,26 @@ def transcription_handler(request, file_path, metadata):
                 "Content-Type": mime,
             }
 
-            # Add model if specified
-            params = {}
-            if request.app.state.config.STT_MODEL:
-                params["model"] = request.app.state.config.STT_MODEL
+            for language in languages:
+                params = {}
+                if request.app.state.config.STT_MODEL:
+                    params["model"] = request.app.state.config.STT_MODEL
 
-            # Make request to Deepgram API
-            r = requests.post(
-                "https://api.deepgram.com/v1/listen?smart_format=true",
-                headers=headers,
-                params=params,
-                data=file_data,
-            )
+                if language:
+                    params["language"] = language
+
+                # Make request to Deepgram API
+                r = requests.post(
+                    "https://api.deepgram.com/v1/listen?smart_format=true",
+                    headers=headers,
+                    params=params,
+                    data=file_data,
+                )
+
+                if r.status_code == 200:
+                    # Successful transcription
+                    break
+
             r.raise_for_status()
             response_data = r.json()
 
@@ -843,20 +820,6 @@ def transcription_handler(request, file_path, metadata):
             )
 
 
-import time
-import random
-
-def transcription_handler_with_retry(request, file_path, metadata, max_retries=3):
-    for attempt in range(max_retries):
-        try:
-            return transcription_handler(request, file_path, metadata)
-        except Exception as e:
-            if "502" in str(e) and attempt < max_retries - 1:
-                delay = (2 ** attempt) + random.uniform(0, 1)  # Exponential backoff
-                time.sleep(delay)
-                continue
-            raise e
-
 def transcribe(request: Request, file_path: str, metadata: Optional[dict] = None):
     log.info(f"transcribe: {file_path} {metadata}")
 
@@ -871,7 +834,7 @@ def transcribe(request: Request, file_path: str, metadata: Optional[dict] = None
     # Always produce a list of chunk paths (could be one entry if small)
     try:
         chunk_paths = split_audio(file_path, MAX_FILE_SIZE)
-        log.info(f"Chunk paths: {chunk_paths}")
+        print(f"Chunk paths: {chunk_paths}")
     except Exception as e:
         log.exception(e)
         raise HTTPException(
@@ -881,10 +844,10 @@ def transcribe(request: Request, file_path: str, metadata: Optional[dict] = None
 
     results = []
     try:
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor() as executor:
             # Submit tasks for each chunk_path
             futures = [
-                executor.submit(transcription_handler_with_retry, request, chunk_path, metadata)
+                executor.submit(transcription_handler, request, chunk_path, metadata)
                 for chunk_path in chunk_paths
             ]
             # Gather results as they complete
@@ -898,13 +861,12 @@ def transcribe(request: Request, file_path: str, metadata: Optional[dict] = None
                     )
     finally:
         # Clean up only the temporary chunks, never the original file
-        log.info("skipping chunks cleanup" )
-        # for chunk_path in chunk_paths:
-        #     if chunk_path != file_path and os.path.isfile(chunk_path):
-        #         try:
-        #             os.remove(chunk_path)
-        #         except Exception:
-        #             pass
+        for chunk_path in chunk_paths:
+            if chunk_path != file_path and os.path.isfile(chunk_path):
+                try:
+                    os.remove(chunk_path)
+                except Exception:
+                    pass
 
     return {
         "text": " ".join([result["text"] for result in results]),
