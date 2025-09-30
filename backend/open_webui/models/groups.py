@@ -77,6 +77,7 @@ class GroupResponse(BaseModel):
     updated_at: int  # timestamp in epoch
 
 
+
 class GroupForm(BaseModel):
     name: str
     description: str
@@ -329,3 +330,4 @@ class GroupTable:
 
 
 Groups = GroupTable()
+

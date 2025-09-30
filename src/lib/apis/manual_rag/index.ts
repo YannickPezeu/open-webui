@@ -1,8 +1,9 @@
 import { toast } from 'svelte-sonner';
+import { WEBUI_API_BASE_URL } from '$lib/constants';
 
 export const searchDocuments = async (
+    token: string,
     query: string,
-    userId: string,
     indexId: string,
     password?: string
 ) => {
@@ -11,53 +12,48 @@ export const searchDocuments = async (
         return null;
     }
 
-    // L'URL de votre nouvelle API
-    const url = `http://localhost:8000/search/${userId}/${indexId}`;
+    let error = null;
 
-    // Le corps (body) de la requête POST
-    const payload = {
-        query: query,
-        password: password || null
-    };
+    const formData = new FormData();
+    formData.append('query', query);
+    if (password) {
+        formData.append('password', password);
+    }
 
-    console.log(`Sending POST request to: ${url}`);
+    console.log(`Sending POST request to: ${WEBUI_API_BASE_URL}/libraries/${indexId}/search`);
     toast.info('Searching...');
 
-    try {
-        const response = await fetch(url, {
-            method: 'POST', // <-- Changement de la méthode
-            headers: {
-                'Content-Type': 'application/json', // <-- Header nécessaire pour le JSON
-                'Accept': 'application/json'
-            },
-            body: JSON.stringify(payload) // <-- On envoie la requête dans le corps
+    const res = await fetch(`${WEBUI_API_BASE_URL}/libraries/${indexId}/search`, {
+        method: 'POST',
+        headers: {
+            authorization: `Bearer ${token}`
+            // Pas de Content-Type pour FormData, le browser le gère
+        },
+        body: formData
+    })
+        .then(async (res) => {
+            if (!res.ok) throw await res.json();
+            return res.json();
+        })
+        .then((json) => {
+            console.log('Search results:', json);
+            if (json && json.length > 0) {
+                toast.success(`Search successful! Found ${json.length} results.`);
+            } else {
+                toast.success('Search complete, but no results were found.');
+            }
+            return json;
+        })
+        .catch((err) => {
+            error = err.detail || err.message || 'Unknown error';
+            console.error('Failed to fetch search results:', err);
+            toast.error(`Search failed: ${error}`);
+            return null;
         });
 
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({
-                detail: 'Failed to parse error response from server.'
-            }));
-            throw new Error(
-                `API Error: ${response.status} ${response.statusText} - ${errorData.detail || 'Unknown error'}`
-            );
-        }
-
-        // Votre nouvelle API retourne directement un tableau de résultats
-        const data = await response.json();
-        console.log('Search results:', data);
-
-        if (data && data.length > 0) {
-            toast.success(`Search successful! Found ${data.length} results.`);
-        } else {
-            toast.success('Search complete, but no results were found.');
-        }
-        
-        // On retourne directement le tableau
-        return data;
-
-    } catch (error) {
-        console.error('Failed to fetch search results:', error);
-        toast.error(`Search failed: ${error.message}`);
-        return null;
+    if (error) {
+        throw error;
     }
+
+    return res;
 };

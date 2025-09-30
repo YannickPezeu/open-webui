@@ -141,6 +141,10 @@ import {
 	  console.log('At selected model:', atSelectedModel?.id);
 	}
 
+	// Ajoutez cette variable réactive avec les autres (vers la ligne 218)
+	let showRagSearchButton = false;
+	console.log('user', $_user);
+	$: showRagSearchButton = $_user?.role === 'admin' || $_user?.permissions?.features?.rag_search;
 
 
 
@@ -1945,21 +1949,23 @@ const handleSubmit = async () => {
 					</Tooltip>
 				{/if}
 
-				<Tooltip content={$i18n.t('RAG search')} placement="top">
-					<button
-						on:click|preventDefault={() => {
-							dispatch('manualRagSearch', prompt)}}
-						type="button"
-						class="px-2 @xl:px-2.5 py-2 flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-800 bg-transparent text-gray-600 dark:text-gray-300"
-					>
-						<Search className="size-4" strokeWidth="1.75" />
-						<span
-							class="hidden @xl:block whitespace-nowrap overflow-hidden text-ellipsis leading-none pr-0.5"
+				{#if showRagSearchButton}
+					<Tooltip content={$i18n.t('RAG search')} placement="top">
+						<button
+							on:click|preventDefault={() => {
+								dispatch('manualRagSearch', prompt)}}
+							type="button"
+							class="px-2 @xl:px-2.5 py-2 flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-800 bg-transparent text-gray-600 dark:text-gray-300"
 						>
-							{$i18n.t('RAG Search')}
-						</span>
-					</button>
-				</Tooltip>
+							<Search className="size-4" strokeWidth="1.75" />
+							<span
+								class="hidden @xl:block whitespace-nowrap overflow-hidden text-ellipsis leading-none pr-0.5"
+							>
+								{$i18n.t('RAG Search')}
+							</span>
+						</button>
+					</Tooltip>
+				{/if}
 			</div>
 		{/if}
 		

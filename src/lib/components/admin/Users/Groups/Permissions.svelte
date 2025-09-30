@@ -41,7 +41,9 @@
 			web_search: true,
 			image_generation: true,
 			code_interpreter: true,
-			notes: true
+			notes: true,
+			rag_search: false  
+
 		}
 	};
 
@@ -417,6 +419,14 @@
 			</div>
 
 			<Switch bind:state={permissions.features.notes} />
+		</div>
+
+		<div class="  flex w-full justify-between my-2 pr-2">
+			<div class=" self-center text-xs font-medium">
+				{$i18n.t('RAG Search')}
+			</div>
+
+			<Switch bind:state={permissions.features.rag_search} />
 		</div>
 	</div>
 </div>

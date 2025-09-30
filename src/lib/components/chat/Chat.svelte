@@ -106,10 +106,16 @@
 
 		// Remplacez par vos vrais ID et le mot de passe si nécessaire
 		const userId = "test_user";
-		const indexId = "test_library";
+		const indexId = "LEX_FR";
 		const password = "supersecret"; // Mettre `undefined` ou `null` si pas de mot de passe
+		console.log('user', $user);
 
-		const data = await searchDocuments(searchQuery, userId, indexId, password);
+		const data = await searchDocuments(
+    $user.token,
+    searchQuery,
+    'LEX_FR',
+    password
+);
 
 		// La nouvelle API retourne un tableau directement
 		if (data && data.length > 0) {
