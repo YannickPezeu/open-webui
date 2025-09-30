@@ -37,8 +37,8 @@ import {
   cleanupModelsLoaded,
   resolveActualModelId,
   shouldWakeUpModel,
-  wakeUpModel,
-  ensureModelsAwakeSSE,
+//   wakeUpModel,
+//   ensureModelsAwakeSSE,
   needsModelCheck,
   updateLastInteractionTime,
 		checkModelAvailability
@@ -89,6 +89,9 @@ import {
 	import InputVariablesModal from './MessageInput/InputVariablesModal.svelte';
 	import Voice from '../icons/Voice.svelte';
 	import { getSessionUser } from '$lib/apis/auths';
+
+	import Search from '../icons/Search.svelte';
+
 	const i18n = getContext('i18n');
 
 	export let onChange: Function = () => {};
@@ -123,6 +126,12 @@ import {
 	let inputVariables = {};
 	let inputVariableValues = {};
 
+ // 2. Add state variables for the modal
+    let showSearchResultsModal = false;
+    let searchResults = [];
+
+    // 3. Create the event handler for when results are confirmed from the modal
+    
 
 
 	// Add debug reactive statement to track model loading changes
@@ -878,20 +887,20 @@ import {
 	// Component state wakeup
 
 	// Clean up models when selection changes
-	$: if (selectedModels.length > 0) {
-	  cleanupModelsLoaded(selectedModels, $models);
-	}
+	// $: if (selectedModels.length > 0) {
+	//   cleanupModelsLoaded(selectedModels, $models);
+	// }
 
 	// Wake up models when they are selected
-	$: {
-	  if ($models.length > 0 && selectedModelIds.length > 0) {
-		selectedModelIds.forEach(async (modelId) => {
-		  if (modelId && shouldWakeUpModel(modelId, $models)) {
-			await wakeUpModel(modelId, $models, $i18n);
-		  }
-		});
-	  }
-	}
+	// $: {
+	//   if ($models.length > 0 && selectedModelIds.length > 0) {
+	// 	selectedModelIds.forEach(async (modelId) => {
+	// 	  if (modelId && shouldWakeUpModel(modelId, $models)) {
+	// 		await wakeUpModel(modelId, $models, $i18n);
+	// 	  }
+	// 	});
+	//   }
+	// }
 
 // src/lib/components/chat/MessageInput.svelte
 
@@ -1810,7 +1819,7 @@ const handleSubmit = async () => {
 			</div>
 		</InputMenu>
 
-		{#if $_user && (showToolsButton || (toggleFilters && toggleFilters.length > 0) || showWebSearchButton || showImageGenerationButton || showCodeInterpreterButton)}
+		{#if $_user}
 			<div class="flex self-center w-[1px] h-4 mx-1.5 bg-gray-50 dark:bg-gray-800" />
 
 			<div class="flex gap-1 items-center overflow-x-auto scrollbar-none flex-1">
@@ -1836,109 +1845,125 @@ const handleSubmit = async () => {
 					</Tooltip>
 				{/if}
 
-				{#if $_user}
-					{#each toggleFilters as filter, filterIdx (filter.id)}
-						<Tooltip content={filter?.description} placement="top">
-							<button
-								on:click|preventDefault={() => {
-									if (selectedFilterIds.includes(filter.id)) {
-										selectedFilterIds = selectedFilterIds.filter((id) => id !== filter.id);
-									} else {
-										selectedFilterIds = [...selectedFilterIds, filter.id];
-									}
-								}}
-								type="button"
-								class="px-2 @xl:px-2.5 py-2 flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-800 {selectedFilterIds.includes(filter.id)
-									? 'text-sky-500 dark:text-sky-300 bg-sky-50 dark:bg-sky-200/5'
-									: 'bg-transparent text-gray-600 dark:text-gray-300  '} capitalize"
+				{#each toggleFilters as filter, filterIdx (filter.id)}
+					<Tooltip content={filter?.description} placement="top">
+						<button
+							on:click|preventDefault={() => {
+								if (selectedFilterIds.includes(filter.id)) {
+									selectedFilterIds = selectedFilterIds.filter((id) => id !== filter.id);
+								} else {
+									selectedFilterIds = [...selectedFilterIds, filter.id];
+								}
+							}}
+							type="button"
+							class="px-2 @xl:px-2.5 py-2 flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-800 {selectedFilterIds.includes(filter.id)
+								? 'text-sky-500 dark:text-sky-300 bg-sky-50 dark:bg-sky-200/5'
+								: 'bg-transparent text-gray-600 dark:text-gray-300  '} capitalize"
+						>
+							{#if filter?.icon}
+								<div class="size-4 items-center flex justify-center">
+									<img
+										src={filter.icon}
+										class="size-3.5 {filter.icon.includes('svg') ? 'dark:invert-[80%]' : ''}"
+										style="fill: currentColor;"
+										alt={filter.name}
+									/>
+								</div>
+							{:else}
+								<Sparkles className="size-4" strokeWidth="1.75" />
+							{/if}
+							<span
+								class="hidden @xl:block whitespace-nowrap overflow-hidden text-ellipsis leading-none pr-0.5"
 							>
-								{#if filter?.icon}
-									<div class="size-4 items-center flex justify-center">
-										<img
-											src={filter.icon}
-											class="size-3.5 {filter.icon.includes('svg') ? 'dark:invert-[80%]' : ''}"
-											style="fill: currentColor;"
-											alt={filter.name}
-										/>
-									</div>
-								{:else}
-									<Sparkles className="size-4" strokeWidth="1.75" />
-								{/if}
-								<span
-									class="hidden @xl:block whitespace-nowrap overflow-hidden text-ellipsis leading-none pr-0.5"
-								>
-									{filter?.name}
-								</span>
-							</button>
-						</Tooltip>
-					{/each}
+								{filter?.name}
+							</span>
+						</button>
+					</Tooltip>
+				{/each}
 
-					{#if showWebSearchButton}
-						<Tooltip content={$i18n.t('Search the internet')} placement="top">
-							<button
-								on:click|preventDefault={() => (webSearchEnabled = !webSearchEnabled)}
-								type="button"
-								class="px-2 @xl:px-2.5 py-2 flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-800 {webSearchEnabled ||
-								($settings?.webSearch ?? false) === 'always'
-									? ' text-sky-500 dark:text-sky-300 bg-sky-50 dark:bg-sky-200/5'
-									: 'bg-transparent text-gray-600 dark:text-gray-300 '}"
+				{#if showWebSearchButton}
+					<Tooltip content={$i18n.t('Search the internet')} placement="top">
+						<button
+							on:click|preventDefault={() => (webSearchEnabled = !webSearchEnabled)}
+							type="button"
+							class="px-2 @xl:px-2.5 py-2 flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-800 {webSearchEnabled ||
+							($settings?.webSearch ?? false) === 'always'
+								? ' text-sky-500 dark:text-sky-300 bg-sky-50 dark:bg-sky-200/5'
+								: 'bg-transparent text-gray-600 dark:text-gray-300 '}"
+						>
+							<GlobeAlt className="size-4" strokeWidth="1.75" />
+							<span
+								class="hidden @xl:block whitespace-nowrap overflow-hidden text-ellipsis leading-none pr-0.5"
 							>
-								<GlobeAlt className="size-4" strokeWidth="1.75" />
-								<span
-									class="hidden @xl:block whitespace-nowrap overflow-hidden text-ellipsis leading-none pr-0.5"
-								>
-									{$i18n.t('Web Search')}
-								</span>
-							</button>
-						</Tooltip>
-					{/if}
-
-					{#if showImageGenerationButton}
-						<Tooltip content={$i18n.t('Generate an image')} placement="top">
-							<button
-								on:click|preventDefault={() => (imageGenerationEnabled = !imageGenerationEnabled)}
-								type="button"
-								class="px-2 @xl:px-2.5 py-2 flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-800 {imageGenerationEnabled
-									? ' text-sky-500 dark:text-sky-300 bg-sky-50 dark:bg-sky-200/5'
-									: 'bg-transparent text-gray-600 dark:text-gray-300 '}"
-							>
-								<Photo className="size-4" strokeWidth="1.75" />
-								<span
-									class="hidden @xl:block whitespace-nowrap overflow-hidden text-ellipsis leading-none pr-0.5"
-								>
-									{$i18n.t('Image')}
-								</span>
-							</button>
-						</Tooltip>
-					{/if}
-
-					{#if showCodeInterpreterButton}
-						<Tooltip content={$i18n.t('Execute code for analysis')} placement="top">
-							<button
-								aria-label={codeInterpreterEnabled
-									? $i18n.t('Disable Code Interpreter')
-									: $i18n.t('Enable Code Interpreter')}
-								aria-pressed={codeInterpreterEnabled}
-								on:click|preventDefault={() => (codeInterpreterEnabled = !codeInterpreterEnabled)}
-								type="button"
-								class="px-2 @xl:px-2.5 py-2 flex gap-1.5 items-center text-sm transition-colors duration-300 max-w-full overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-800 {codeInterpreterEnabled
-									? ' text-sky-500 dark:text-sky-300 bg-sky-50 dark:bg-sky-200/5'
-									: 'bg-transparent text-gray-600 dark:text-gray-300 '} {($settings?.highContrastMode ?? false)
-									? 'm-1'
-									: 'focus:outline-hidden rounded-full'}"
-							>
-								<CommandLine className="size-4" strokeWidth="1.75" />
-								<span
-									class="hidden @xl:block whitespace-nowrap overflow-hidden text-ellipsis leading-none pr-0.5"
-								>
-									{$i18n.t('Code Interpreter')}
-								</span>
-							</button>
-						</Tooltip>
-					{/if}
+								{$i18n.t('Web Search')}
+							</span>
+						</button>
+					</Tooltip>
 				{/if}
+
+				{#if showImageGenerationButton}
+					<Tooltip content={$i18n.t('Generate an image')} placement="top">
+						<button
+							on:click|preventDefault={() => (imageGenerationEnabled = !imageGenerationEnabled)}
+							type="button"
+							class="px-2 @xl:px-2.5 py-2 flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-800 {imageGenerationEnabled
+								? ' text-sky-500 dark:text-sky-300 bg-sky-50 dark:bg-sky-200/5'
+								: 'bg-transparent text-gray-600 dark:text-gray-300 '}"
+						>
+							<Photo className="size-4" strokeWidth="1.75" />
+							<span
+								class="hidden @xl:block whitespace-nowrap overflow-hidden text-ellipsis leading-none pr-0.5"
+							>
+								{$i18n.t('Image')}
+							</span>
+						</button>
+					</Tooltip>
+				{/if}
+
+				{#if showCodeInterpreterButton}
+					<Tooltip content={$i18n.t('Execute code for analysis')} placement="top">
+						<button
+							aria-label={codeInterpreterEnabled
+								? $i18n.t('Disable Code Interpreter')
+								: $i18n.t('Enable Code Interpreter')}
+							aria-pressed={codeInterpreterEnabled}
+							on:click|preventDefault={() => (codeInterpreterEnabled = !codeInterpreterEnabled)}
+							type="button"
+							class="px-2 @xl:px-2.5 py-2 flex gap-1.5 items-center text-sm transition-colors duration-300 max-w-full overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-800 {codeInterpreterEnabled
+								? ' text-sky-500 dark:text-sky-300 bg-sky-50 dark:bg-sky-200/5'
+								: 'bg-transparent text-gray-600 dark:text-gray-300 '} {($settings?.highContrastMode ?? false)
+								? 'm-1'
+								: 'focus:outline-hidden rounded-full'}"
+						>
+							<CommandLine className="size-4" strokeWidth="1.75" />
+							<span
+								class="hidden @xl:block whitespace-nowrap overflow-hidden text-ellipsis leading-none pr-0.5"
+							>
+								{$i18n.t('Code Interpreter')}
+							</span>
+						</button>
+					</Tooltip>
+				{/if}
+
+				<Tooltip content={$i18n.t('RAG search')} placement="top">
+					<button
+						on:click|preventDefault={() => {
+							dispatch('manualRagSearch', prompt)}}
+						type="button"
+						class="px-2 @xl:px-2.5 py-2 flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-800 bg-transparent text-gray-600 dark:text-gray-300"
+					>
+						<Search className="size-4" strokeWidth="1.75" />
+						<span
+							class="hidden @xl:block whitespace-nowrap overflow-hidden text-ellipsis leading-none pr-0.5"
+						>
+							{$i18n.t('RAG Search')}
+						</span>
+					</button>
+				</Tooltip>
 			</div>
 		{/if}
+		
+					
 	</div>
 
 									<div class="self-end flex space-x-1 mr-1 shrink-0">

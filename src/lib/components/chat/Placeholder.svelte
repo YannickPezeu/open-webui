@@ -229,6 +229,9 @@
 					on:submit={(e) => {
 						dispatch('submit', e.detail);
 					}}
+					on:manualRagSearch={(e) => {
+        dispatch('manualRagSearch', e.detail);
+    }}
 				/>
 			</div>
 		</div>

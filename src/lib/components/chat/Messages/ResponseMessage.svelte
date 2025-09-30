@@ -53,6 +53,74 @@
 	import { flyAndScale } from '$lib/utils/transitions';
 	import RegenerateMenu from './ResponseMessage/RegenerateMenu.svelte';
 
+
+const fakeSources = [
+  {
+    document: ["L'intelligence artificielle transforme rapidement le paysage technologique. Les modèles de langage comme GPT-4 et Claude montrent des capacités impressionnantes dans la compréhension et la génération de texte."],
+    metadata: [{
+      source: "https://techcrunch.com/ai-revolution-2024",
+      name: "L'IA révolutionne la tech en 2024"
+    }],
+    distances: [0.15], // Score de distance (plus proche de 0 = plus pertinent)
+    source: {
+      id: "https://techcrunch.com/ai-revolution-2024",
+      name: "L'IA révolutionne la tech en 2024",
+      url: "https://techcrunch.com/ai-revolution-2024"
+    }
+  },
+  {
+    document: ["Les entreprises adoptent massivement l'IA générative pour automatiser leurs processus. Une étude montre que 75% des organisations prévoient d'intégrer l'IA dans leurs opérations d'ici 2025."],
+    metadata: [{
+      source: "https://www.mckinsey.com/ai-adoption-study",
+      name: "Étude McKinsey sur l'adoption de l'IA"
+    }],
+    distances: [0.22],
+    source: {
+      id: "https://www.mckinsey.com/ai-adoption-study",
+      name: "Étude McKinsey sur l'adoption de l'IA",
+      url: "https://www.mckinsey.com/ai-adoption-study"
+    }
+  },
+  {
+    document: ["Le marché de l'IA devrait atteindre 1,8 trillion de dollars d'ici 2030. Les secteurs de la santé, de la finance et de l'automobile sont en tête de cette transformation."],
+    metadata: [{
+      source: "https://bloomberg.com/ai-market-forecast",
+      name: "Prévisions du marché IA - Bloomberg"
+    }],
+    distances: [0.18],
+    source: {
+      id: "https://bloomberg.com/ai-market-forecast",
+      name: "Prévisions du marché IA - Bloomberg",
+      url: "https://bloomberg.com/ai-market-forecast"
+    }
+  },
+  {
+    document: ["OpenAI a récemment lancé GPT-4 Turbo avec des capacités multimodales avancées. Cette nouvelle version peut traiter simultanément texte, images et audio."],
+    metadata: [{
+      source: "https://openai.com/blog/gpt4-turbo-announcement",
+      name: "Annonce GPT-4 Turbo - OpenAI"
+    }],
+    distances: [0.12],
+    source: {
+      id: "https://openai.com/blog/gpt4-turbo-announcement",
+      name: "Annonce GPT-4 Turbo - OpenAI",
+      url: "https://openai.com/blog/gpt4-turbo-announcement"
+    }
+  },
+  {
+    document: ["Les réglementations sur l'IA se renforcent globalement. L'UE a adopté l'AI Act, première législation complète sur l'intelligence artificielle au monde."],
+    metadata: [{
+      source: "https://ec.europa.eu/ai-act-regulation",
+      name: "Règlement européen sur l'IA"
+    }],
+    distances: [0.28],
+    source: {
+      id: "https://ec.europa.eu/ai-act-regulation",
+      name: "Règlement européen sur l'IA",
+      url: "https://ec.europa.eu/ai-act-regulation"
+    }
+  }
+];
 	interface MessageType {
 		id: string;
 		model: string;

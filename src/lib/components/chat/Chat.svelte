@@ -13,7 +13,8 @@
 	import { get, type Unsubscriber, type Writable } from 'svelte/store';
 	import type { i18n as i18nType } from 'i18next';
 	import { WEBUI_BASE_URL } from '$lib/constants';
-
+	import { searchDocuments } from '$lib/apis/manual_rag'; // Ajoutez cet import
+    import SearchResultsModal from './ManualRag/SearchResultsModal.svelte'; // 1. Import the modal
 	import {
 		chatId,
 		chats,
@@ -92,6 +93,36 @@
 
 	export let chatIdProp = '';
 
+
+	let showSearchResultsModal = false;
+	let searchResults = [];
+
+	const handleSearchClick = async (event) => {
+		const searchQuery = event.detail;
+		if (!searchQuery.trim()) {
+			toast.info('Please enter a search query in the message box.');
+			return;
+		}
+
+		// Remplacez par vos vrais ID et le mot de passe si nécessaire
+		const userId = "test_user";
+		const indexId = "test_library";
+		const password = "supersecret"; // Mettre `undefined` ou `null` si pas de mot de passe
+
+		const data = await searchDocuments(searchQuery, userId, indexId, password);
+
+		// La nouvelle API retourne un tableau directement
+		if (data && data.length > 0) {
+			searchResults = data;
+			showSearchResultsModal = true;
+		}
+	};
+
+
+
+	
+	// The handler for adding sources to files is already correct
+
 	let loading = true;
 
 	const eventTarget = new EventTarget();
@@ -151,6 +182,15 @@
 	$: if (chatIdProp) {
 		navigateHandler();
 	}
+
+	const handleConfirmSelection = (event) => {
+        const newSourceFiles = event.detail; // This is now an array of document objects
+
+        // Add the new sources to the main files array
+        files = [...files, ...newSourceFiles];
+
+        toast.success($i18n.t('{{count}} sources added to the context.', { count: newSourceFiles.length }));
+    };
 
 	const navigateHandler = async () => {
 		loading = true;
@@ -2174,12 +2214,19 @@
 	}}
 />
 
+
+
 <div
 	class="h-screen max-h-[100dvh] transition-width duration-200 ease-in-out {$showSidebar
 		? '  md:max-w-[calc(100%-260px)]'
 		: ' '} w-full max-w-full flex flex-col"
 	id="chat-container"
 >
+<SearchResultsModal
+	bind:show={showSearchResultsModal}
+	results={searchResults}
+	on:manualRagConfirm={handleConfirmSelection}
+/>
 	{#if !loading}
 		<div in:fade={{ duration: 50 }} class="w-full h-full flex flex-col">
 			{#if $settings?.backgroundImageUrl ?? $config?.license_metadata?.background_image_url ?? null}
@@ -2296,6 +2343,8 @@
 							</div>
 
 							<div class=" pb-2">
+								
+
 								<MessageInput
 									bind:this={messageInput}
 									{history}
@@ -2331,6 +2380,8 @@
 											await uploadGoogleDriveFile(data);
 										}
 									}}
+									on:manualRagSearch={handleSearchClick}
+
 									on:submit={async (e) => {
 										clearDraft();
 										if (e.detail || files.length > 0) {
@@ -2376,6 +2427,8 @@
 											saveDraft(data);
 										}
 									}}
+									on:manualRagSearch={handleSearchClick}
+
 									on:upload={async (e) => {
 										const { type, data } = e.detail;
 
@@ -2397,6 +2450,7 @@
 										}
 									}}
 								/>
+								
 							</div>
 						{/if}
 					</div>
