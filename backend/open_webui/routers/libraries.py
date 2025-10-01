@@ -34,6 +34,7 @@ def get_user_group_names(user_id: str) -> List[str]:
     logger.debug(f"User {user_id} belongs to groups: {group_names}")
     return group_names
 
+openwebui_url = os.getenv("OPENWEBUI_URL", "http://localhost:8080")
 
 @router.post("/{library_id}/search")
 async def search_library(
@@ -48,14 +49,9 @@ async def search_library(
     """
     logger.info(f"🔍 User {user.email} searching in library {library_id}")
     
-    # Récupérer les groupes réels de l'utilisateur
     user_group_names = get_user_group_names(user.id)
     logger.info(f"User groups: {user_group_names}")
     
-    if not user_group_names:
-        logger.warning(f"User {user.email} has no groups assigned")
-    
-    # Appeler le FastAPI avec l'API key interne
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
@@ -80,22 +76,22 @@ async def search_library(
                 )
             
             results = response.json()
+            
+            # ✅ NOUVEAU : Transformer les file_url en URLs complètes Open WebUI
+            for result in results:
+                if result.get("file_url"):
+                    # Construire l'URL complète qui passe par le proxy Open WebUI
+                    result["file_url"] = f"{openwebui_url}/api/v1/libraries/{library_id}/download/{result['file_url']}"
+            
             logger.info(f"✅ Search successful: {len(results)} results")
             return results
             
     except httpx.TimeoutException:
         logger.error(f"Timeout calling library API for {library_id}")
-        raise HTTPException(
-            status_code=504,
-            detail="Search request timed out"
-        )
+        raise HTTPException(status_code=504, detail="Search request timed out")
     except httpx.RequestError as e:
         logger.error(f"Error calling library API: {e}")
-        raise HTTPException(
-            status_code=503,
-            detail="Library search service unavailable"
-        )
-
+        raise HTTPException(status_code=503, detail="Library search service unavailable")
 
 @router.post("/create")
 async def create_library(
@@ -187,3 +183,65 @@ async def delete_library(
     # TODO: Implémenter quand la table Library sera créée
     logger.info(f"🗑️ Library {library_id} deletion requested by {user.email}")
     return {"status": "success", "message": "Not implemented yet"}
+
+
+from fastapi.responses import StreamingResponse
+
+@router.get("/{library_id}/download/{filename}")
+async def download_file(
+    library_id: str,
+    filename: str,
+    user: Users = Depends(get_current_user)
+):
+    """
+    Proxy pour télécharger un fichier source depuis une library.
+    Vérifie automatiquement les permissions de l'utilisateur.
+    """
+    logger.info(f"📥 User {user.email} downloading {filename} from {library_id}")
+    
+    # Récupérer les groupes de l'utilisateur
+    user_group_names = get_user_group_names(user.id)
+    
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.get(
+                f"{LIBRARY_API_URL}/files/{library_id}/{filename}",
+                headers={"X-API-Key": LIBRARY_API_KEY},
+                params={"user_groups": ",".join(user_group_names)}
+            )
+            
+            if response.status_code == 403:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You don't have permission to access this file"
+                )
+            elif response.status_code == 404:
+                raise HTTPException(
+                    status_code=404,
+                    detail="File not found"
+                )
+            elif response.status_code != 200:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail="Error downloading file"
+                )
+            
+            # Récupérer le content-type depuis la réponse
+            content_type = response.headers.get('content-type', 'application/octet-stream')
+            
+            logger.info(f"✅ File download successful: {filename}")
+            
+            return StreamingResponse(
+                iter([response.content]),
+                media_type=content_type,
+                headers={
+                    'Content-Disposition': f'inline; filename="{filename}"'
+                }
+            )
+            
+    except httpx.TimeoutException:
+        logger.error(f"Timeout downloading file {filename}")
+        raise HTTPException(status_code=504, detail="Download request timed out")
+    except httpx.RequestError as e:
+        logger.error(f"Error downloading file: {e}")
+        raise HTTPException(status_code=503, detail="File service unavailable")

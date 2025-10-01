@@ -1252,7 +1252,7 @@ app.include_router(
 )
 app.include_router(utils.router, prefix="/api/v1/utils", tags=["utils"])
 
-app.include_router(libraries.router, prefix="/api/v1/libraries", tags=["libraries"])  # ✅ Ajoute cette ligne
+app.include_router(libraries.router, prefix="/api/v1/libraries", tags=["libraries"])  
 
 # SCIM 2.0 API for identity management
 if SCIM_ENABLED:
