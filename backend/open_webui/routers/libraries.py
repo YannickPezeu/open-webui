@@ -4,11 +4,11 @@ import logging
 import httpx
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 
 from open_webui.models.users import Users
-from open_webui.models.groups import Groups  # ✅ Importer Groups, pas UserGroup
+from open_webui.models.groups import Groups
 from open_webui.utils.auth import get_current_user, get_admin_user
-from open_webui.internal.db import get_db
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -16,6 +16,7 @@ router = APIRouter()
 # Configuration
 LIBRARY_API_URL = os.getenv("LIBRARY_API_URL", "http://hierarchical-search-service:80")
 LIBRARY_API_KEY = os.getenv("VITE_LIBRARY_API_KEY")
+OPENWEBUI_URL = os.getenv("OPENWEBUI_URL", "http://localhost:8080")
 
 print(f"Library API URL: {LIBRARY_API_URL}")
 
@@ -34,7 +35,6 @@ def get_user_group_names(user_id: str) -> List[str]:
     logger.debug(f"User {user_id} belongs to groups: {group_names}")
     return group_names
 
-openwebui_url = os.getenv("OPENWEBUI_URL", "http://localhost:8080")
 
 @router.post("/{library_id}/search")
 async def search_library(
@@ -46,6 +46,10 @@ async def search_library(
     """
     Proxy vers le FastAPI de recherche.
     Vérifie l'utilisateur et transmet ses groupes vérifiés.
+    
+    Retourne des résultats avec:
+    - precise_content: contenu précis du child node (pour affichage)
+    - context_content: contenu étendu du parent node (pour le LLM)
     """
     logger.info(f"🔍 User {user.email} searching in library {library_id}")
     
@@ -77,13 +81,24 @@ async def search_library(
             
             results = response.json()
             
-            # ✅ NOUVEAU : Transformer les file_url en URLs complètes Open WebUI
+            # ✅ Transformer les file_url en URLs complètes Open WebUI
+            # Les résultats ont maintenant precise_content et context_content
             for result in results:
                 if result.get("file_url"):
                     # Construire l'URL complète qui passe par le proxy Open WebUI
-                    result["file_url"] = f"{openwebui_url}/api/v1/libraries/{library_id}/download/{result['file_url']}"
+                    result["file_url"] = f"{OPENWEBUI_URL}/api/v1/libraries/{library_id}/download/{result['file_url']}"
+                
+                # Log pour debug (optionnel)
+                if logger.isEnabledFor(logging.DEBUG):
+                    precise_len = len(result.get("precise_content", ""))
+                    context_len = len(result.get("context_content", ""))
+                    logger.debug(
+                        f"Result: {result.get('title', 'Unknown')} | "
+                        f"Precise: {precise_len} chars | Context: {context_len} chars"
+                    )
             
             logger.info(f"✅ Search successful: {len(results)} results")
+            logger.info(f"   Each result contains precise_content (display) and context_content (LLM)")
             return results
             
     except httpx.TimeoutException:
@@ -92,6 +107,7 @@ async def search_library(
     except httpx.RequestError as e:
         logger.error(f"Error calling library API: {e}")
         raise HTTPException(status_code=503, detail="Library search service unavailable")
+
 
 @router.post("/create")
 async def create_library(
@@ -146,7 +162,6 @@ async def create_library(
                 )
         
         # TODO: Enregistrer dans la DB Open WebUI si tu créées la table Library
-        # Pour l'instant, on skippe cette partie
         
         logger.info(f"✅ Library {library_id} created successfully")
         return {
@@ -184,8 +199,6 @@ async def delete_library(
     logger.info(f"🗑️ Library {library_id} deletion requested by {user.email}")
     return {"status": "success", "message": "Not implemented yet"}
 
-
-from fastapi.responses import StreamingResponse
 
 @router.get("/{library_id}/download/{filename}")
 async def download_file(

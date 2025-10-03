@@ -15,88 +15,69 @@
 			selectedIndices = [];
 			expandedIndices = [];
 		} else {
-			// Sélectionner le top 3
-			const top3Indices = results.slice(0, 3).map((_, index) => index);
-			
-			// Ajouter tous ceux avec score > 0.4 (s'ils ne sont pas déjà dans top3)
-			const highScoreIndices = results
-				.map((r, i) => ({ score: r.score, index: i }))
-				.filter(item => item.score > 0.4 && !top3Indices.includes(item.index))
-				.map(item => item.index);
-			
-			// Combiner les deux ensembles
-			selectedIndices = [...top3Indices, ...highScoreIndices];
+			// Select ALL results by default
+			selectedIndices = results.map((_, index) => index);
 			expandedIndices = [];
 		}
 	}
 
-// SearchResultsModal.svelte
-function extractSearchText(mainContent: string): string | null {
-    if (!mainContent) return null;
-    
-    // Retirer les marqueurs markdown
-    let text = mainContent.replace(/^#+\s*/gm, '');
-    
-    // Séparer par double saut de ligne (paragraphes)
-    const paragraphs = text.split(/\n\n+/).map(p => p.trim()).filter(p => p.length > 0);
-    
-    if (paragraphs.length === 0) return null;
-    
-    // Fonction pour vérifier si un mot est "safe"
-    const isSafeWord = (word: string): boolean => {
-        return /^[a-zA-Z0-9àâäéèêëïîôùûüÿæœçÀÂÄÉÈÊËÏÎÔÙÛÜŸÆŒÇ]/.test(word) &&
-               !word.includes("'") &&
-               !word.includes("'");
-    };
-    
-    // Chercher une séquence de 6 mots safe dans chaque paragraphe
-    for (const paragraph of paragraphs) {
-        const cleanParagraph = paragraph.replace(/\n/g, ' ');
-        const words = cleanParagraph.split(/\s+/).filter(w => w.length > 0);
-        
-        // Chercher une fenêtre glissante de 6 mots consécutifs safe
-        for (let i = 0; i <= words.length - 6; i++) {
-            const window = words.slice(i, i + 6);
-            
-            if (window.every(isSafeWord)) {
-                // Trouvé une séquence safe !
-                return window.join(' ');
-            }
-        }
-        
-        // Si pas de séquence de 6, essayer avec 4 mots
-        for (let i = 0; i <= words.length - 4; i++) {
-            const window = words.slice(i, i + 4);
-            
-            if (window.every(isSafeWord)) {
-                return window.join(' ');
-            }
-        }
-    }
-    
-    // Aucune séquence safe trouvée
-    return null;
-}
-
-function buildPdfUrl(baseUrl: string, searchText: string | null): string {
-    if (!baseUrl) return '#';
-    
-    // Si on a du texte de recherche et que c'est un PDF
-    if (searchText && baseUrl.toLowerCase().endsWith('.pdf')) {
-        const encodedSearch = encodeURIComponent(searchText);
-        return `${baseUrl}#:~:text=${encodedSearch}`;
-    }
-    
-    return baseUrl;
-}
-
-	function getPageFromUrl(url: string): number | null {
-		try {
-			const match = url.match(/#page=(\d+)/);
-			return match ? parseInt(match[1], 10) : null;
-		} catch {
-			return null;
+	// Extraction de texte pour la recherche dans les PDFs
+	// ✅ Utilise precise_content pour trouver le bon passage dans le PDF
+	function extractSearchText(preciseContent: string): string | null {
+		if (!preciseContent) return null;
+		
+		// Retirer les marqueurs markdown
+		let text = preciseContent.replace(/^#+\s*/gm, '');
+		
+		// Séparer par double saut de ligne (paragraphes)
+		const paragraphs = text.split(/\n\n+/).map(p => p.trim()).filter(p => p.length > 0);
+		
+		if (paragraphs.length === 0) return null;
+		
+		// Fonction pour vérifier si un mot est "safe"
+		const isSafeWord = (word: string): boolean => {
+			return /^[a-zA-Z0-9àâäéèêëïîôùûüÿæœçÀÂÄÉÈÊËÏÎÔÙÛÜŸÆŒÇ]/.test(word) &&
+				   !word.includes("'") &&
+				   !word.includes("'");
+		};
+		
+		// Chercher une séquence de 6 mots safe dans chaque paragraphe
+		for (const paragraph of paragraphs) {
+			const cleanParagraph = paragraph.replace(/\n/g, ' ');
+			const words = cleanParagraph.split(/\s+/).filter(w => w.length > 0);
+			
+			// Chercher une fenêtre glissante de 6 mots consécutifs safe
+			for (let i = 0; i <= words.length - 6; i++) {
+				const window = words.slice(i, i + 6);
+				
+				if (window.every(isSafeWord)) {
+					return window.join(' ');
+				}
+			}
+			
+			// Si pas de séquence de 6, essayer avec 4 mots
+			for (let i = 0; i <= words.length - 4; i++) {
+				const window = words.slice(i, i + 4);
+				
+				if (window.every(isSafeWord)) {
+					return window.join(' ');
+				}
+			}
 		}
+		
+		return null;
+	}
+
+	function buildPdfUrl(baseUrl: string, searchText: string | null): string {
+		if (!baseUrl) return '#';
+		
+		// Si on a du texte de recherche et que c'est un PDF
+		if (searchText && baseUrl.toLowerCase().endsWith('.pdf')) {
+			const encodedSearch = encodeURIComponent(searchText);
+			return `${baseUrl}#:~:text=${encodedSearch}`;
+		}
+		
+		return baseUrl;
 	}
 
 	function toggleSelection(index: number) {
@@ -112,15 +93,26 @@ function buildPdfUrl(baseUrl: string, searchText: string | null): string {
 		const isExpanded = expandedIndices.includes(index);
 		if (isExpanded) {
 			expandedIndices = expandedIndices.filter((i) => i !== index);
+			// Scroller vers le haut de l'élément
+			setTimeout(() => {
+				const element = document.getElementById(`result-item-${index}`);
+				if (element) {
+					element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+				}
+			}, 0);
 		} else {
 			expandedIndices = [...expandedIndices, index];
 		}
 	}
 
-	function getTruncatedContent(content: string, maxLines: number = 5): { truncated: string; needsExpansion: boolean } {
-		const lines = content.split('\n');
+	// ✅ Nouvelle fonction : tronquer le precise_content pour l'affichage initial
+	function getTruncatedPreciseContent(preciseContent: string, maxLines: number = 5): { 
+		truncated: string; 
+		needsExpansion: boolean 
+	} {
+		const lines = preciseContent.split('\n');
 		if (lines.length <= maxLines) {
-			return { truncated: content, needsExpansion: false };
+			return { truncated: preciseContent, needsExpansion: true }; // Toujours permettre d'étendre
 		}
 		return { 
 			truncated: lines.slice(0, maxLines).join('\n'),
@@ -137,14 +129,16 @@ function buildPdfUrl(baseUrl: string, searchText: string | null): string {
 		}
 
 		const sourceDocuments = selectedResults.map((result) => {
-			const searchText = extractSearchText(result.main_content);
+			// ✅ Utiliser precise_content pour construire l'URL avec fragment
+			const searchText = extractSearchText(result.precise_content);
 			const pdfUrl = buildPdfUrl(result.file_url, searchText);
 
 			return {
 				type: 'text',
 				id: uuidv4(),
 				name: `Source: ${result.title}`,
-				content: result.content_with_context,
+				// ✅ Utiliser context_content pour le LLM (plus de contexte)
+				content: result.context_content,
 				status: 'uploaded',
 				url: pdfUrl,
 				source: {
@@ -202,14 +196,19 @@ function buildPdfUrl(baseUrl: string, searchText: string | null): string {
 			<div class="max-h-[60vh] space-y-4 overflow-y-auto pr-2">
 				{#each results as result, i}
 					{@const checkboxId = `result-checkbox-${i}`}
-					{@const searchText = extractSearchText(result.main_content)}
-					{@const pdfUrl = buildPdfUrl(result.file_url, searchText)}
 					{@const isExpanded = expandedIndices.includes(i)}
-					{@const { truncated, needsExpansion } = getTruncatedContent(result.main_content)}
-					{@const contentToShow = isExpanded ? result.main_content : truncated}
+					
+					<!-- ✅ Logique d'affichage du contenu -->
+					{@const { truncated: truncatedPrecise, needsExpansion } = getTruncatedPreciseContent(result.precise_content)}
+					{@const contentToShow = isExpanded ? result.context_content : truncatedPrecise}
+					
+					<!-- ✅ URL construite depuis precise_content -->
+					{@const searchText = extractSearchText(result.precise_content)}
+					{@const pdfUrl = buildPdfUrl(result.file_url, searchText)}
 					
 					<label
 						for={checkboxId}
+						id="result-item-{i}"
 						class="block cursor-pointer rounded-lg border p-4 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700"
 					>
 						<div class="flex items-start">
@@ -240,16 +239,35 @@ function buildPdfUrl(baseUrl: string, searchText: string | null): string {
 											Relevance: {(result.score * 100).toFixed(1)}%
 										</span>
 									{/if}
+									
 								</div>
+								
+								<!-- ✅ Bouton en haut (seulement en mode étendu) -->
+								{#if needsExpansion && isExpanded}
+									<button
+										on:click|stopPropagation={() => toggleExpanded(i)}
+										class="mt-2 text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
+									>
+										▲ Show less
+									</button>
+								{/if}
+								
+								<!-- ✅ Affichage du contenu : truncatedPrecise OU full context_content -->
 								<blockquote class="prose prose-sm mt-2 max-w-none border-l-2 border-gray-300 pl-2 text-gray-600 dark:prose-invert dark:border-gray-500 dark:text-gray-400">
 									{@html marked(contentToShow)}
 								</blockquote>
+								
+								<!-- ✅ Bouton pour basculer entre precise (tronqué) et context (complet) -->
 								{#if needsExpansion}
 									<button
 										on:click|stopPropagation={() => toggleExpanded(i)}
 										class="mt-2 text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
 									>
-										{isExpanded ? '▲ Voir moins' : '▼ Voir plus'}
+										{#if isExpanded}
+											▲ Show less
+										{:else}
+											▼ Show more 
+										{/if}
 									</button>
 								{/if}
 							</div>
@@ -271,7 +289,7 @@ function buildPdfUrl(baseUrl: string, searchText: string | null): string {
 					on:click={handleConfirm}
 					class="rounded-lg bg-sky-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-sky-700"
 				>
-					Add to Message
+					Add to Message ({selectedIndices.length} selected)
 				</button>
 			</div>
 		</div>
