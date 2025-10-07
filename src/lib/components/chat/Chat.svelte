@@ -108,7 +108,6 @@
 		const userId = "test_user";
 		const indexId = "LEX_FR";
 		const password = "supersecret"; // Mettre `undefined` ou `null` si pas de mot de passe
-		console.log('user', $user);
 
 		const data = await searchDocuments(
     $user.token,
@@ -346,7 +345,6 @@
 	};
 
 	const chatEventHandler = async (event, cb) => {
-		console.log(event);
 
 		if (event.chat_id === $chatId) {
 			await tick();
@@ -1425,7 +1423,6 @@
 			);
 		}
 
-		console.log(data);
 		await tick();
 
 		if (autoScroll) {

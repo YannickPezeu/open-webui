@@ -15,8 +15,8 @@
 			selectedIndices = [];
 			expandedIndices = [];
 		} else {
-			// Select ALL results by default
-			selectedIndices = results.map((_, index) => index);
+			// ✅ Tout désélectionné par défaut
+			selectedIndices = [];
 			expandedIndices = [];
 		}
 	}
@@ -105,14 +105,14 @@
 		}
 	}
 
-	// ✅ Nouvelle fonction : tronquer le precise_content pour l'affichage initial
+	// ✅ Fonction pour tronquer le precise_content uniquement
 	function getTruncatedPreciseContent(preciseContent: string, maxLines: number = 5): { 
 		truncated: string; 
 		needsExpansion: boolean 
 	} {
 		const lines = preciseContent.split('\n');
 		if (lines.length <= maxLines) {
-			return { truncated: preciseContent, needsExpansion: true }; // Toujours permettre d'étendre
+			return { truncated: preciseContent, needsExpansion: false };
 		}
 		return { 
 			truncated: lines.slice(0, maxLines).join('\n'),
@@ -156,6 +156,16 @@
 		show = false;
 	}
 
+	function toggleSelectAll() {
+		if (selectedIndices.length === results.length) {
+			// Si tout est sélectionné, tout désélectionner
+			selectedIndices = [];
+		} else {
+			// Sinon, tout sélectionner
+			selectedIndices = results.map((_, index) => index);
+		}
+	}
+
 	const handleKeydown = (e) => {
 		if (e.key === 'Escape') {
 			close();
@@ -177,7 +187,27 @@
 			on:click|stopPropagation
 		>
 			<div class="mb-4 flex items-center justify-between border-b pb-3 dark:border-gray-700">
-				<h3 class="text-xl font-semibold text-gray-900 dark:text-white">Search Results</h3>
+				<div class="flex items-center gap-4">
+					<h3 class="text-xl font-semibold text-gray-900 dark:text-white">Search Results</h3>
+					<button
+						on:click={toggleSelectAll}
+						class="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+					>
+						<input
+							type="checkbox"
+							class="size-4 rounded border-gray-300 text-sky-600 focus:ring-sky-500 pointer-events-none"
+							checked={selectedIndices.length === results.length && results.length > 0}
+							indeterminate={selectedIndices.length > 0 && selectedIndices.length < results.length}
+						/>
+						<span>
+							{#if selectedIndices.length === results.length && results.length > 0}
+								Unselect All
+							{:else}
+								Select All
+							{/if}
+						</span>
+					</button>
+				</div>
 				<button
 					on:click={close}
 					class="rounded-lg p-1.5 text-gray-400 hover:bg-gray-200 hover:text-gray-900 dark:hover:bg-gray-600 dark:hover:text-white"
@@ -198,32 +228,45 @@
 					{@const checkboxId = `result-checkbox-${i}`}
 					{@const isExpanded = expandedIndices.includes(i)}
 					
-					<!-- ✅ Logique d'affichage du contenu -->
+					<!-- ✅ Utilise TOUJOURS precise_content (tronqué ou complet) -->
 					{@const { truncated: truncatedPrecise, needsExpansion } = getTruncatedPreciseContent(result.precise_content)}
-					{@const contentToShow = isExpanded ? result.context_content : truncatedPrecise}
+					{@const contentToShow = isExpanded ? result.precise_content : truncatedPrecise}
 					
 					<!-- ✅ URL construite depuis precise_content -->
 					{@const searchText = extractSearchText(result.precise_content)}
 					{@const pdfUrl = buildPdfUrl(result.file_url, searchText)}
 					
-					<label
-						for={checkboxId}
+					<div
 						id="result-item-{i}"
-						class="block cursor-pointer rounded-lg border p-4 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700"
+						class="block rounded-lg border p-4 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700"
 					>
-						<div class="flex items-start">
-							<input
-								type="checkbox"
-								id={checkboxId}
-								class="mr-4 mt-1 size-5 shrink-0 rounded border-gray-300 text-sky-600 focus:ring-sky-500"
-								checked={selectedIndices.includes(i)}
-								on:change={() => toggleSelection(i)}
-							/>
-							<div class="min-w-0 flex-1">
-								<p class="font-semibold text-gray-800 dark:text-gray-200">
-									{result.title}
-								</p>
-								<div class="mt-1 flex items-center space-x-3 text-xs text-gray-500 dark:text-gray-400">
+						<div class="flex items-start gap-4">
+							<!-- ✅ Zone checkbox cliquable séparément avec largeur fixe -->
+							<div
+								class="flex shrink-0 items-center justify-center w-12 cursor-pointer self-stretch"
+								on:click={() => toggleSelection(i)}
+								role="button"
+								tabindex="0"
+								on:keydown={(e) => e.key === 'Enter' && toggleSelection(i)}
+							>
+								<input
+									type="checkbox"
+									id={checkboxId}
+									class="size-5 rounded border-gray-300 text-sky-600 focus:ring-sky-500 pointer-events-none"
+									checked={selectedIndices.includes(i)}
+									on:change={() => toggleSelection(i)}
+								/>
+							</div>
+							<!-- ✅ Zone contenu cliquable pour expand/collapse -->
+							<div 
+								class="min-w-0 flex-1 cursor-pointer"
+								on:click={() => toggleExpanded(i)}
+								role="button"
+								tabindex="0"
+								on:keydown={(e) => e.key === 'Enter' && toggleExpanded(i)}
+							>
+								<!-- ✅ Titre supprimé -->
+								<div class="flex items-center space-x-3 text-xs text-gray-500 dark:text-gray-400">
 									<a
 										href={pdfUrl}
 										target="_blank"
@@ -239,40 +282,28 @@
 											Relevance: {(result.score * 100).toFixed(1)}%
 										</span>
 									{/if}
-									
 								</div>
 								
-								<!-- ✅ Bouton en haut (seulement en mode étendu) -->
-								{#if needsExpansion && isExpanded}
-									<button
-										on:click|stopPropagation={() => toggleExpanded(i)}
-										class="mt-2 text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
-									>
-										▲ Show less
-									</button>
-								{/if}
+								<!-- ✅ Bouton en haut supprimé car le clic sur la zone fait déjà le toggle -->
 								
-								<!-- ✅ Affichage du contenu : truncatedPrecise OU full context_content -->
+								<!-- ✅ Affichage UNIQUEMENT de precise_content (tronqué ou complet) -->
 								<blockquote class="prose prose-sm mt-2 max-w-none border-l-2 border-gray-300 pl-2 text-gray-600 dark:prose-invert dark:border-gray-500 dark:text-gray-400">
 									{@html marked(contentToShow)}
 								</blockquote>
 								
-								<!-- ✅ Bouton pour basculer entre precise (tronqué) et context (complet) -->
+								<!-- ✅ Indicateur visuel en bas -->
 								{#if needsExpansion}
-									<button
-										on:click|stopPropagation={() => toggleExpanded(i)}
-										class="mt-2 text-sm font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
-									>
+									<div class="mt-2 text-sm font-medium text-sky-600 dark:text-sky-400">
 										{#if isExpanded}
-											▲ Show less
+											▲ Click to show less
 										{:else}
-											▼ Show more 
+											▼ Click to show more 
 										{/if}
-									</button>
+									</div>
 								{/if}
 							</div>
 						</div>
-					</label>
+					</div>
 				{:else}
 					<p class="text-gray-500">No results found.</p>
 				{/each}
