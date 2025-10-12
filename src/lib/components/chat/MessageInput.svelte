@@ -15,6 +15,7 @@
 
 	import { onMount, tick, getContext, createEventDispatcher, onDestroy } from 'svelte';
 	const dispatch = createEventDispatcher();
+	import { searchDocuments } from '$lib/apis/manual_rag'; // Ajoutez cet import
 
 	import {
 		type Model,
@@ -125,6 +126,10 @@ import {
 	let showInputVariablesModal = false;
 	let inputVariables = {};
 	let inputVariableValues = {};
+
+	let ragSearchEnabled = false;
+	let ragExpertMode = false;
+	let showRagTooltip = false;
 
  // 2. Add state variables for the modal
     let showSearchResultsModal = false;
@@ -908,59 +913,118 @@ import {
 
 // src/lib/components/chat/MessageInput.svelte
 
+function buildPreciseUrl(result: any): string {
+    const fileUrl = result.file_url;
+    const sourceUrl = result.source_url;
+    
+    const isPdf = result.file_type === 'pdf' || fileUrl?.toLowerCase().endsWith('.pdf');
+    const isHtml = ['html', 'htm'].includes(result.file_type) || 
+                   fileUrl?.toLowerCase().endsWith('.html') || 
+                   fileUrl?.toLowerCase().endsWith('.htm');
+    
+    if (isPdf) {
+      if (!fileUrl) return '#';
+      
+      if (result.node_anchor_id) {
+        return `${fileUrl}#nameddest=${result.node_anchor_id}`;
+      }
+      
+      if (result.page_number) {
+        return `${fileUrl}#page=${result.page_number}`;
+      }
+      
+      return fileUrl;
+    }
+    
+    if (isHtml) {
+      if (!sourceUrl) return fileUrl || '#';
+      
+      if (result.search_text_start && result.search_text_end) {
+        const start = encodeURIComponent(result.search_text_start);
+        const end = encodeURIComponent(result.search_text_end);
+        
+        if (result.search_text_start === result.search_text_end) {
+          return `${sourceUrl}#:~:text=${start}`;
+        }
+        
+        return `${sourceUrl}#:~:text=${start},${end}`;
+      }
+      
+      if (result.node_anchor_id) {
+        return `${sourceUrl}#${result.node_anchor_id}`;
+      }
+      
+      return sourceUrl;
+    }
+    
+    return fileUrl || '#';
+  }
+
 const handleSubmit = async () => {
-  // Return early if there's no input
-  if (prompt === '' && files.length === 0) {
-    return;
-  }
+    if (prompt === '' && files.length === 0) {
+      return;
+    }
 
-  // Step 1: Determine the target models for THIS submission.
-  // If @mentioning a model, that's the only target.
-  // Otherwise, the targets are all currently selected models.
-  const targetModelIds = (atSelectedModel ? [atSelectedModel.id] : selectedModels).filter(id => id);
+    const targetModelIds = (atSelectedModel ? [atSelectedModel.id] : selectedModels).filter(id => id);
 
-  // Check if any models are targeted
-  if (targetModelIds.length === 0) {
-    toast.error($i18n.t('Please select a model first.'));
-    return;
-  }
+    if (targetModelIds.length === 0) {
+      toast.error($i18n.t('Please select a model first.'));
+      return;
+    }
 
-  // Step 2: Check if all TARGET models are loaded.
-  // This loop ensures that for a multi-model message, all targets must be ready.
-  // For a single-model message, it only checks that one.
-//   for (const modelId of targetModelIds) {
-//     const actualModelId = resolveActualModelId(modelId, $models);
-//     const isAvailable = await checkModelAvailability(modelId, $models);
+    // Si RAG Search est activé, on effectue la recherche d'abord
+    if (ragSearchEnabled && prompt.trim()) {
+      try {
+        const userId = "test_user";
+        const indexId = "LEX_FR";
+        const password = "supersecret";
 
-//     // Skip unavailable models, as they can't be loaded anyway.
-//     if (!isAvailable) continue;
+        const results = await searchDocuments(
+          $_user.token,
+          prompt,
+          'test_enrichment_html',
+          password
+        );
 
-//     // If an available model is not marked as loaded, block the submission.
-//     if (!$modelsLoaded[actualModelId]) {
-//       toast.info($i18n.t('Models are still loading, please wait...'));
-//       return;
-//     }
-//   }
+        if (results && results.length > 0) {
+          if (ragExpertMode) {
+            // Mode Expert: ouvrir le modal pour sélection manuelle
+            dispatch('manualRagSearch', { query: prompt, results });
+            return; // On n'envoie pas le message tout de suite
+          } else {
+            // Mode automatique: ajouter les 10 premiers résultats
+            const autoSelectedDocs = results.slice(0, 10).map((result) => {
+              const preciseUrl = buildPreciseUrl(result);
+              return {
+                type: 'text',
+                id: uuidv4(),
+                name: `Source: ${result.title}`,
+                content: result.context_content,
+                status: 'uploaded',
+                url: preciseUrl,
+                source: {
+                  url: preciseUrl,
+                  name: result.title
+                }
+              };
+            });
+            
+            // Ajouter les docs aux fichiers
+            files = [...files, ...autoSelectedDocs];
+            toast.success($i18n.t('{{count}} sources added automatically.', { count: autoSelectedDocs.length }));
+          }
+        } else {
+          toast.info($i18n.t('No results found for RAG search.'));
+        }
+      } catch (error) {
+        console.error('RAG search error:', error);
+        toast.error($i18n.t('Error performing RAG search'));
+      }
+    }
 
-  // Step 3: Perform a final "wake-up" check on the primary target model.
-  // This handles cases where a model might have gone to sleep since being loaded.
-//   const primaryTargetModel = targetModelIds[0];
-//   if (needsModelCheck(primaryTargetModel, $models)) {
-//     checkingModels = true;
-//     const modelsReady = await ensureModelsAwakeSSE(primaryTargetModel, $models, $i18n);
-//     checkingModels = false;
-//     if (!modelsReady) {
-//       return;
-//     }
-//   }
-
-  // Step 4: Update activity time for all targets and send the message.
-//   targetModelIds.forEach(modelId => {
-//     updateLastInteractionTime(modelId, $models);
-//   });
-
-  dispatch('submit', prompt);
-};
+    // Continue avec la soumission normale
+    dispatch('submit', prompt);
+  };
 </script>
 
 <FilesOverlay show={dragged} />
@@ -1950,22 +2014,58 @@ const handleSubmit = async () => {
 				{/if}
 
 				{#if showRagSearchButton}
-					<Tooltip content={$i18n.t('RAG search')} placement="top">
-						<button
-							on:click|preventDefault={() => {
-								dispatch('manualRagSearch', prompt)}}
-							type="button"
-							class="px-2 @xl:px-2.5 py-2 flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-800 bg-transparent text-gray-600 dark:text-gray-300"
-						>
-							<Search className="size-4" strokeWidth="1.75" />
-							<span
-								class="hidden @xl:block whitespace-nowrap overflow-hidden text-ellipsis leading-none pr-0.5"
-							>
-								{$i18n.t('RAG Search')}
-							</span>
-						</button>
-					</Tooltip>
-				{/if}
+  <div 
+    class="relative"
+    on:mouseenter={() => showRagTooltip = true}
+    on:mouseleave={() => showRagTooltip = false}
+  >
+    <Tooltip content={ragSearchEnabled ? $i18n.t('RAG search enabled') : $i18n.t('RAG search disabled')} placement="top">
+      <button
+        on:click|preventDefault={() => {
+          ragSearchEnabled = !ragSearchEnabled;
+          if (!ragSearchEnabled) {
+            ragExpertMode = false; // Reset expert mode quand on désactive
+          }
+        }}
+        type="button"
+        class="px-2 @xl:px-2.5 py-2 flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-800 {ragSearchEnabled
+          ? 'text-sky-500 dark:text-sky-300 bg-sky-50 dark:bg-sky-200/5'
+          : 'bg-transparent text-gray-600 dark:text-gray-300'}"
+      >
+        <Search className="size-4" strokeWidth="1.75" />
+        <span
+          class="hidden @xl:block whitespace-nowrap overflow-hidden text-ellipsis leading-none pr-0.5"
+        >
+          {$i18n.t('RAG Search')}
+        </span>
+      </button>
+    </Tooltip>
+    
+    <!-- Hover tooltip pour Expert Mode -->
+    {#if showRagTooltip && ragSearchEnabled}
+      <div 
+        class="absolute bottom-full left-0 mb-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-3 z-50 min-w-[200px]"
+        on:click|stopPropagation
+      >
+        <label class="flex items-center gap-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 rounded p-1.5 transition">
+          <input
+            type="checkbox"
+            bind:checked={ragExpertMode}
+            class="size-4 rounded border-gray-300 text-sky-600 focus:ring-sky-500"
+          />
+          <div class="flex flex-col">
+            <span class="text-sm font-medium text-gray-900 dark:text-white">
+              {$i18n.t('Expert Mode')}
+            </span>
+            <span class="text-xs text-gray-500 dark:text-gray-400">
+              {$i18n.t('Manually select sources')}
+            </span>
+          </div>
+        </label>
+      </div>
+    {/if}
+  </div>
+{/if}
 			</div>
 		{/if}
 		

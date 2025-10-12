@@ -98,30 +98,37 @@
 	let searchResults = [];
 
 	const handleSearchClick = async (event) => {
-		const searchQuery = event.detail;
-		if (!searchQuery.trim()) {
-			toast.info('Please enter a search query in the message box.');
-			return;
+		const { query, results } = event.detail;
+		
+		// Si on a déjà les résultats (mode expert), on les affiche directement
+		if (results && results.length > 0) {
+		searchResults = results;
+		showSearchResultsModal = true;
+		return;
+		}
+		
+		// Sinon (ancien comportement pour compatibilité)
+		if (!query?.trim()) {
+		toast.info('Please enter a search query in the message box.');
+		return;
 		}
 
-		// Remplacez par vos vrais ID et le mot de passe si nécessaire
 		const userId = "test_user";
 		const indexId = "LEX_FR";
-		const password = "supersecret"; // Mettre `undefined` ou `null` si pas de mot de passe
+		const password = "supersecret";
 
 		const data = await searchDocuments(
-    $user.token,
-    searchQuery,
-    'test_enrichment_html',
-    password
-);
+		$user.token,
+		query,
+		'test_enrichment_html',
+		password
+		);
 
-		// La nouvelle API retourne un tableau directement
 		if (data && data.length > 0) {
-			searchResults = data;
-			showSearchResultsModal = true;
+		searchResults = data;
+		showSearchResultsModal = true;
 		}
-	};
+  };
 
 
 
