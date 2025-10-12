@@ -21,63 +21,70 @@
 		}
 	}
 
-	// Extraction de texte pour la recherche dans les PDFs
-	// ✅ Utilise precise_content pour trouver le bon passage dans le PDF
-	function extractSearchText(preciseContent: string): string | null {
-		if (!preciseContent) return null;
+	function buildPreciseUrl(result: any): string {
+		const fileUrl = result.file_url;
+		const sourceUrl = result.source_url;
 		
-		// Retirer les marqueurs markdown
-		let text = preciseContent.replace(/^#+\s*/gm, '');
+		// ✅ Détecter le type à partir de file_type OU de l'extension du file_url
+		const isPdf = result.file_type === 'pdf' || fileUrl?.toLowerCase().endsWith('.pdf');
+		const isHtml = ['html', 'htm'].includes(result.file_type) || 
+		               fileUrl?.toLowerCase().endsWith('.html') || 
+		               fileUrl?.toLowerCase().endsWith('.htm');
 		
-		// Séparer par double saut de ligne (paragraphes)
-		const paragraphs = text.split(/\n\n+/).map(p => p.trim()).filter(p => p.length > 0);
-		
-		if (paragraphs.length === 0) return null;
-		
-		// Fonction pour vérifier si un mot est "safe"
-		const isSafeWord = (word: string): boolean => {
-			return /^[a-zA-Z0-9àâäéèêëïîôùûüÿæœçÀÂÄÉÈÊËÏÎÔÙÛÜŸÆŒÇ]/.test(word) &&
-				   !word.includes("'") &&
-				   !word.includes("'");
-		};
-		
-		// Chercher une séquence de 6 mots safe dans chaque paragraphe
-		for (const paragraph of paragraphs) {
-			const cleanParagraph = paragraph.replace(/\n/g, ' ');
-			const words = cleanParagraph.split(/\s+/).filter(w => w.length > 0);
+		// ========================================
+		// LOGIQUE POUR LES PDFs
+		// ========================================
+		if (isPdf) {
+			if (!fileUrl) return '#';
 			
-			// Chercher une fenêtre glissante de 6 mots consécutifs safe
-			for (let i = 0; i <= words.length - 6; i++) {
-				const window = words.slice(i, i + 6);
-				
-				if (window.every(isSafeWord)) {
-					return window.join(' ');
-				}
+			// ✨ STRATÉGIE 1 : Ancre de node (précision maximale)
+			if (result.node_anchor_id) {
+				return `${fileUrl}#nameddest=${result.node_anchor_id}`;
 			}
 			
-			// Si pas de séquence de 6, essayer avec 4 mots
-			for (let i = 0; i <= words.length - 4; i++) {
-				const window = words.slice(i, i + 4);
-				
-				if (window.every(isSafeWord)) {
-					return window.join(' ');
-				}
+			// ✨ STRATÉGIE 2 : Fallback sur page_number
+			if (result.page_number) {
+				return `${fileUrl}#page=${result.page_number}`;
 			}
+			
+			// ✨ STRATÉGIE 3 : URL simple (fichier depuis serveur)
+			return fileUrl;
 		}
 		
-		return null;
-	}
-
-	function buildPdfUrl(baseUrl: string, searchText: string | null): string {
-		if (!baseUrl) return '#';
-		
-		// Si on a du texte de recherche et que c'est un PDF
-		if (searchText && baseUrl.toLowerCase().endsWith('.pdf')) {
-			const encodedSearch = encodeURIComponent(searchText);
-			return `${baseUrl}#:~:text=${encodedSearch}`;
+		// ========================================
+		// LOGIQUE POUR LES HTMLs
+		// ========================================
+		if (isHtml) {
+			// ✅ Pour HTML, on utilise source_url (site WordPress avec CSS/JS)
+			if (!sourceUrl) return fileUrl || '#';
+			
+			// ✨ STRATÉGIE 1 : Text fragment avec start,end (vient directement du backend)
+			if (result.search_text_start && result.search_text_end) {
+				const start = encodeURIComponent(result.search_text_start);
+				const end = encodeURIComponent(result.search_text_end);
+				
+				// ✅ Si start et end sont identiques, utiliser la syntaxe simple
+				if (result.search_text_start === result.search_text_end) {
+					return `${sourceUrl}#:~:text=${start}`;
+				}
+				
+				// Sinon, utiliser la syntaxe start,end
+				return `${sourceUrl}#:~:text=${start},${end}`;
+			}
+			
+			// ✨ STRATÉGIE 2 : Fallback sur node_anchor_id (ancre HTML classique)
+			if (result.node_anchor_id) {
+				return `${sourceUrl}#${result.node_anchor_id}`;
+			}
+			
+			// ✨ STRATÉGIE 3 : URL simple (site WordPress original)
+			return sourceUrl;
 		}
 		
-		return baseUrl;
+		// ========================================
+		// AUTRES TYPES DE FICHIERS
+		// ========================================
+		return fileUrl || '#';
 	}
 
 	function toggleSelection(index: number) {
@@ -129,9 +136,8 @@
 		}
 
 		const sourceDocuments = selectedResults.map((result) => {
-			// ✅ Utiliser precise_content pour construire l'URL avec fragment
-			const searchText = extractSearchText(result.precise_content);
-			const pdfUrl = buildPdfUrl(result.file_url, searchText);
+			// ✅ Utiliser buildPreciseUrl pour construire l'URL avec l'ancre appropriée
+			const preciseUrl = buildPreciseUrl(result);
 
 			return {
 				type: 'text',
@@ -140,9 +146,9 @@
 				// ✅ Utiliser context_content pour le LLM (plus de contexte)
 				content: result.context_content,
 				status: 'uploaded',
-				url: pdfUrl,
+				url: preciseUrl,
 				source: {
-					url: pdfUrl,
+					url: preciseUrl,
 					name: result.title
 				}
 			};
@@ -232,9 +238,8 @@
 					{@const { truncated: truncatedPrecise, needsExpansion } = getTruncatedPreciseContent(result.precise_content)}
 					{@const contentToShow = isExpanded ? result.precise_content : truncatedPrecise}
 					
-					<!-- ✅ URL construite depuis precise_content -->
-					{@const searchText = extractSearchText(result.precise_content)}
-					{@const pdfUrl = buildPdfUrl(result.file_url, searchText)}
+					<!-- ✅ URL construite avec buildPreciseUrl (PDF ou HTML) -->
+					{@const preciseUrl = buildPreciseUrl(result)}
 					
 					<div
 						id="result-item-{i}"
@@ -265,10 +270,9 @@
 								tabindex="0"
 								on:keydown={(e) => e.key === 'Enter' && toggleExpanded(i)}
 							>
-								<!-- ✅ Titre supprimé -->
 								<div class="flex items-center space-x-3 text-xs text-gray-500 dark:text-gray-400">
 									<a
-										href={pdfUrl}
+										href={preciseUrl}
 										target="_blank"
 										rel="noopener noreferrer"
 										class="truncate hover:underline"
@@ -283,8 +287,6 @@
 										</span>
 									{/if}
 								</div>
-								
-								<!-- ✅ Bouton en haut supprimé car le clic sur la zone fait déjà le toggle -->
 								
 								<!-- ✅ Affichage UNIQUEMENT de precise_content (tronqué ou complet) -->
 								<blockquote class="prose prose-sm mt-2 max-w-none border-l-2 border-gray-300 pl-2 text-gray-600 dark:prose-invert dark:border-gray-500 dark:text-gray-400">

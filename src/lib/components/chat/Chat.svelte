@@ -112,7 +112,7 @@
 		const data = await searchDocuments(
     $user.token,
     searchQuery,
-    'LEX_FR',
+    'test_enrichment_html',
     password
 );
 
