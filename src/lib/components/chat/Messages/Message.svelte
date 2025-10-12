@@ -11,7 +11,6 @@
 	import MultiResponseMessages from './MultiResponseMessages.svelte';
 	import ResponseMessage from './ResponseMessage.svelte';
 	import UserMessage from './UserMessage.svelte';
-
 	export let chatId;
 	export let selectedModels = [];
 	export let idx = 0;
@@ -42,6 +41,7 @@
 	export let triggerScroll;
 	export let readOnly = false;
 	export let topPadding = false;
+
 </script>
 
 <li
@@ -94,6 +94,7 @@
 				{addMessages}
 				{readOnly}
 				{topPadding}
+				on:showRagSources
 			/>
 		{:else}
 			<MultiResponseMessages

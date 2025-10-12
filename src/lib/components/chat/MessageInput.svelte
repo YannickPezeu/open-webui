@@ -16,7 +16,7 @@
 	import { onMount, tick, getContext, createEventDispatcher, onDestroy } from 'svelte';
 	const dispatch = createEventDispatcher();
 	import { searchDocuments } from '$lib/apis/manual_rag'; // Ajoutez cet import
-
+	import { generateOptimizedRagQuery } from '$lib/apis/manual_rag';
 	import {
 		type Model,
 		mobile,
@@ -126,6 +126,9 @@ import {
 	let showInputVariablesModal = false;
 	let inputVariables = {};
 	let inputVariableValues = {};
+
+
+	import RagSearchButton from './MessageInput/RagSearchButton.svelte';
 
 	let ragSearchEnabled = false;
 	let ragExpertMode = false;
@@ -960,7 +963,7 @@ function buildPreciseUrl(result: any): string {
     return fileUrl || '#';
   }
 
-const handleSubmit = async () => {
+  const handleSubmit = async () => {
     if (prompt === '' && files.length === 0) {
       return;
     }
@@ -974,25 +977,59 @@ const handleSubmit = async () => {
 
     // Si RAG Search est activé, on effectue la recherche d'abord
     if (ragSearchEnabled && prompt.trim()) {
+      let searchToastId; // ✅ Variable pour stocker l'ID du toast
+      
       try {
-        const userId = "test_user";
-        const indexId = "LEX_FR";
-        const password = "supersecret";
+        // 1. Générer une requête optimisée avec le LLM
+        toast.info($i18n.t('Optimizing search query...'));
+        
+        const conversationContext = history?.currentId 
+          ? createMessagesList(history, history.currentId).map(msg => ({
+              role: msg.role,
+              content: msg.content
+            }))
+          : [];
 
-        const results = await searchDocuments(
-          $_user.token,
+        const optimizedQuery = await generateOptimizedRagQuery(
+          localStorage.token,
           prompt,
-          'test_enrichment_html',
-          password
+          conversationContext,
+          targetModelIds[0]
         );
 
+        console.log('📝 Original query:', prompt);
+        console.log('🎯 Optimized query:', optimizedQuery);
+
+        // ✅ 2. Afficher la requête dans un toast persistant
+        searchToastId = toast.loading(
+          $i18n.t('Searching documents with: "{{query}}"', { query: optimizedQuery }),
+          {
+            duration: Infinity // ✅ Garder le toast jusqu'à ce qu'on le dismiss manuellement
+          }
+        );
+        
+        const results = await searchDocuments(
+          $_user.token,
+          optimizedQuery,
+          'test_enrichment_html',
+          'supersecret'
+        );
+
+        // ✅ 3. Dismiss le toast de recherche et afficher le succès
+        toast.dismiss(searchToastId);
+
         if (results && results.length > 0) {
+          toast.success($i18n.t('{{count}} results found', { count: results.length }));
+          
           if (ragExpertMode) {
-            // Mode Expert: ouvrir le modal pour sélection manuelle
-            dispatch('manualRagSearch', { query: prompt, results });
-            return; // On n'envoie pas le message tout de suite
+            dispatch('manualRagSearch', { 
+              query: prompt,
+              optimizedQuery: optimizedQuery,
+              results: results,
+              expertMode: true
+            });
+            return;
           } else {
-            // Mode automatique: ajouter les 10 premiers résultats
             const autoSelectedDocs = results.slice(0, 10).map((result) => {
               const preciseUrl = buildPreciseUrl(result);
               return {
@@ -1002,6 +1039,8 @@ const handleSubmit = async () => {
                 content: result.context_content,
                 status: 'uploaded',
                 url: preciseUrl,
+			    isRagSource: true,  // ✅ Ajout du flag
+
                 source: {
                   url: preciseUrl,
                   name: result.title
@@ -1009,7 +1048,6 @@ const handleSubmit = async () => {
               };
             });
             
-            // Ajouter les docs aux fichiers
             files = [...files, ...autoSelectedDocs];
             toast.success($i18n.t('{{count}} sources added automatically.', { count: autoSelectedDocs.length }));
           }
@@ -1018,6 +1056,12 @@ const handleSubmit = async () => {
         }
       } catch (error) {
         console.error('RAG search error:', error);
+        
+        // ✅ Dismiss le toast de recherche en cas d'erreur
+        if (searchToastId) {
+          toast.dismiss(searchToastId);
+        }
+        
         toast.error($i18n.t('Error performing RAG search'));
       }
     }
@@ -2014,57 +2058,15 @@ const handleSubmit = async () => {
 				{/if}
 
 				{#if showRagSearchButton}
-  <div 
-    class="relative"
-    on:mouseenter={() => showRagTooltip = true}
-    on:mouseleave={() => showRagTooltip = false}
-  >
-    <Tooltip content={ragSearchEnabled ? $i18n.t('RAG search enabled') : $i18n.t('RAG search disabled')} placement="top">
-      <button
-        on:click|preventDefault={() => {
-          ragSearchEnabled = !ragSearchEnabled;
-          if (!ragSearchEnabled) {
-            ragExpertMode = false; // Reset expert mode quand on désactive
-          }
-        }}
-        type="button"
-        class="px-2 @xl:px-2.5 py-2 flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-800 {ragSearchEnabled
-          ? 'text-sky-500 dark:text-sky-300 bg-sky-50 dark:bg-sky-200/5'
-          : 'bg-transparent text-gray-600 dark:text-gray-300'}"
-      >
-        <Search className="size-4" strokeWidth="1.75" />
-        <span
-          class="hidden @xl:block whitespace-nowrap overflow-hidden text-ellipsis leading-none pr-0.5"
-        >
-          {$i18n.t('RAG Search')}
-        </span>
-      </button>
-    </Tooltip>
-    
-    <!-- Hover tooltip pour Expert Mode -->
-    {#if showRagTooltip && ragSearchEnabled}
-      <div 
-        class="absolute bottom-full left-0 mb-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-3 z-50 min-w-[200px]"
-        on:click|stopPropagation
-      >
-        <label class="flex items-center gap-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 rounded p-1.5 transition">
-          <input
-            type="checkbox"
-            bind:checked={ragExpertMode}
-            class="size-4 rounded border-gray-300 text-sky-600 focus:ring-sky-500"
-          />
-          <div class="flex flex-col">
-            <span class="text-sm font-medium text-gray-900 dark:text-white">
-              {$i18n.t('Expert Mode')}
-            </span>
-            <span class="text-xs text-gray-500 dark:text-gray-400">
-              {$i18n.t('Manually select sources')}
-            </span>
-          </div>
-        </label>
-      </div>
-    {/if}
-  </div>
+  <RagSearchButton
+    bind:ragSearchEnabled
+    bind:ragExpertMode
+    onClose={async () => {
+      await tick();
+      const chatInput = document.getElementById('chat-input');
+      chatInput?.focus();
+    }}
+  />
 {/if}
 			</div>
 		{/if}

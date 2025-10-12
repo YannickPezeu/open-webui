@@ -5,6 +5,7 @@
 
 	export let show = false;
 	export let results: any[] = [];
+	export let viewOnly = false; // ✅ Nouvelle prop pour le mode lecture seule
 
 	let selectedIndices = [];
 	let expandedIndices = [];
@@ -88,6 +89,8 @@
 	}
 
 	function toggleSelection(index: number) {
+		if (viewOnly) return; // ✅ Pas de sélection en mode viewOnly
+		
 		const isSelected = selectedIndices.includes(index);
 		if (isSelected) {
 			selectedIndices = selectedIndices.filter((i) => i !== index);
@@ -128,6 +131,8 @@
 	}
 
 	function handleConfirm() {
+		if (viewOnly) return; // ✅ Pas de confirmation en mode viewOnly
+		
 		const selectedResults = results.filter((_, index) => selectedIndices.includes(index));
 
 		if (selectedResults.length === 0) {
@@ -147,6 +152,7 @@
 				content: result.context_content,
 				status: 'uploaded',
 				url: preciseUrl,
+				isRagSource: true,
 				source: {
 					url: preciseUrl,
 					name: result.title
@@ -163,6 +169,8 @@
 	}
 
 	function toggleSelectAll() {
+		if (viewOnly) return; // ✅ Pas de sélection en mode viewOnly
+		
 		if (selectedIndices.length === results.length) {
 			// Si tout est sélectionné, tout désélectionner
 			selectedIndices = [];
@@ -183,36 +191,39 @@
 
 {#if show}
 	<div
-		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+		class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50"
 		on:click={close}
 		role="dialog"
 		aria-modal="true"
 	>
 		<div
-			class="relative w-full max-w-8xl rounded-lg bg-white p-6 shadow-xl dark:bg-gray-800"
+			class="relative w-full max-w-8xl mx-4 rounded-lg bg-white p-6 shadow-xl dark:bg-gray-800"
 			on:click|stopPropagation
 		>
 			<div class="mb-4 flex items-center justify-between border-b pb-3 dark:border-gray-700">
 				<div class="flex items-center gap-4">
 					<h3 class="text-xl font-semibold text-gray-900 dark:text-white">Search Results</h3>
-					<button
-						on:click={toggleSelectAll}
-						class="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
-					>
-						<input
-							type="checkbox"
-							class="size-4 rounded border-gray-300 text-sky-600 focus:ring-sky-500 pointer-events-none"
-							checked={selectedIndices.length === results.length && results.length > 0}
-							indeterminate={selectedIndices.length > 0 && selectedIndices.length < results.length}
-						/>
-						<span>
-							{#if selectedIndices.length === results.length && results.length > 0}
-								Unselect All
-							{:else}
-								Select All
-							{/if}
-						</span>
-					</button>
+					
+					{#if !viewOnly}
+						<button
+							on:click={toggleSelectAll}
+							class="flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+						>
+							<input
+								type="checkbox"
+								class="size-4 rounded border-gray-300 text-sky-600 focus:ring-sky-500 pointer-events-none"
+								checked={selectedIndices.length === results.length && results.length > 0}
+								indeterminate={selectedIndices.length > 0 && selectedIndices.length < results.length}
+							/>
+							<span>
+								{#if selectedIndices.length === results.length && results.length > 0}
+									Unselect All
+								{:else}
+									Select All
+								{/if}
+							</span>
+						</button>
+					{/if}
 				</div>
 				<button
 					on:click={close}
@@ -246,22 +257,25 @@
 						class="block rounded-lg border p-4 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700"
 					>
 						<div class="flex items-start gap-4">
-							<!-- ✅ Zone checkbox cliquable séparément avec largeur fixe -->
-							<div
-								class="flex shrink-0 items-center justify-center w-12 cursor-pointer self-stretch"
-								on:click={() => toggleSelection(i)}
-								role="button"
-								tabindex="0"
-								on:keydown={(e) => e.key === 'Enter' && toggleSelection(i)}
-							>
-								<input
-									type="checkbox"
-									id={checkboxId}
-									class="size-5 rounded border-gray-300 text-sky-600 focus:ring-sky-500 pointer-events-none"
-									checked={selectedIndices.includes(i)}
-									on:change={() => toggleSelection(i)}
-								/>
-							</div>
+							<!-- ✅ Checkbox visible uniquement si NOT viewOnly -->
+							{#if !viewOnly}
+								<div
+									class="flex shrink-0 items-center justify-center w-12 cursor-pointer self-stretch"
+									on:click={() => toggleSelection(i)}
+									role="button"
+									tabindex="0"
+									on:keydown={(e) => e.key === 'Enter' && toggleSelection(i)}
+								>
+									<input
+										type="checkbox"
+										id={checkboxId}
+										class="size-5 rounded border-gray-300 text-sky-600 focus:ring-sky-500 pointer-events-none"
+										checked={selectedIndices.includes(i)}
+										on:change={() => toggleSelection(i)}
+									/>
+								</div>
+							{/if}
+							
 							<!-- ✅ Zone contenu cliquable pour expand/collapse -->
 							<div 
 								class="min-w-0 flex-1 cursor-pointer"
@@ -316,14 +330,17 @@
 					on:click={close}
 					class="rounded-lg bg-gray-200 px-5 py-2.5 text-sm font-medium text-gray-800 hover:bg-gray-300 dark:bg-gray-600 dark:text-white dark:hover:bg-gray-500"
 				>
-					Cancel
+					{viewOnly ? 'Close' : 'Cancel'}
 				</button>
-				<button
-					on:click={handleConfirm}
-					class="rounded-lg bg-sky-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-sky-700"
-				>
-					Add to Message ({selectedIndices.length} selected)
-				</button>
+				
+				{#if !viewOnly}
+					<button
+						on:click={handleConfirm}
+						class="rounded-lg bg-sky-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-sky-700"
+					>
+						Add to Message ({selectedIndices.length} selected)
+					</button>
+				{/if}
 			</div>
 		</div>
 	</div>

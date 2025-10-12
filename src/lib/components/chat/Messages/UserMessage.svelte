@@ -177,7 +177,7 @@
 			{#if edit !== true}
 				{#if message.files}
 					<div class="mb-1 w-full flex flex-col justify-end overflow-x-auto gap-1 flex-wrap">
-						{#each message.files as file}
+						{#each message.files.filter(f => !f.isRagSource) as file}
 							<div class={($settings?.chatBubble ?? true) ? 'self-end' : ''}>
 								{#if file.type === 'image'}
 									<Image src={file.url} imageClassName=" max-h-96 rounded-lg" />
@@ -201,7 +201,7 @@
 				<div class=" w-full bg-gray-50 dark:bg-gray-800 rounded-3xl px-5 py-3 mb-2">
 					{#if (editedFiles ?? []).length > 0}
 						<div class="flex items-center flex-wrap gap-2 -mx-2 mb-1">
-							{#each editedFiles as file, fileIdx}
+							{#each editedFiles.filter(f => !f.isRagSource) as file, fileIdx}
 								{#if file.type === 'image'}
 									<div class=" relative group">
 										<div class="relative flex items-center">

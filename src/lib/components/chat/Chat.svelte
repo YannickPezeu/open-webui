@@ -96,40 +96,49 @@
 
 	let showSearchResultsModal = false;
 	let searchResults = [];
+	let showRagSourcesModal = false;
+	let ragSourcesData = [];
+
+  let pendingRagQuery = '';
+  let isExpertModeSubmission = false;
 
 	const handleSearchClick = async (event) => {
-		const { query, results } = event.detail;
-		
-		// Si on a déjà les résultats (mode expert), on les affiche directement
-		if (results && results.length > 0) {
-		searchResults = results;
-		showSearchResultsModal = true;
-		return;
-		}
-		
-		// Sinon (ancien comportement pour compatibilité)
-		if (!query?.trim()) {
-		toast.info('Please enter a search query in the message box.');
-		return;
-		}
+    const { query, results, expertMode } = event.detail;  // ✅ Récupère expertMode
+    
+    // Si on a déjà les résultats (mode expert), on les affiche directement
+    if (results && results.length > 0) {
+      searchResults = results;
+      pendingRagQuery = query;  // ✅ Stocke le query
+      isExpertModeSubmission = expertMode || false;  // ✅ Stocke le mode
+      showSearchResultsModal = true;
+      return;
+    }
+    
+    // Sinon (ancien comportement pour compatibilité)
+    if (!query?.trim()) {
+      toast.info('Please enter a search query in the message box.');
+      return;
+    }
 
-		const userId = "test_user";
-		const indexId = "LEX_FR";
-		const password = "supersecret";
+    const userId = "test_user";
+    const indexId = "LEX_FR";
+    const password = "supersecret";
 
-		const data = await searchDocuments(
-		$user.token,
-		query,
-		'test_enrichment_html',
-		password
-		);
+    const data = await searchDocuments(
+      $user.token,
+      query,
+      'test_enrichment_html',
+      password
+    );
 
-		if (data && data.length > 0) {
-		searchResults = data;
-		showSearchResultsModal = true;
-		}
+    if (data && data.length > 0) {
+      searchResults = data;
+      pendingRagQuery = query;  // ✅ Stocke le query
+      showSearchResultsModal = true;
+    }
   };
 
+  
 
 
 	
@@ -195,14 +204,25 @@
 		navigateHandler();
 	}
 
-	const handleConfirmSelection = (event) => {
-        const newSourceFiles = event.detail; // This is now an array of document objects
+	const handleConfirmSelection = async (event) => {
+    const newSourceFiles = event.detail;
 
-        // Add the new sources to the main files array
-        files = [...files, ...newSourceFiles];
+    // Add the new sources to the main files array
+    files = [...files, ...newSourceFiles];
 
-        toast.success($i18n.t('{{count}} sources added to the context.', { count: newSourceFiles.length }));
-    };
+    toast.success($i18n.t('{{count}} sources added to the context.', { count: newSourceFiles.length }));
+
+    // ✅ Si on est en mode expert, soumettre automatiquement
+    if (isExpertModeSubmission && pendingRagQuery) {
+      await tick();
+      submitPrompt(pendingRagQuery);
+      
+      // Reset les variables
+      pendingRagQuery = '';
+      isExpertModeSubmission = false;
+    }
+  };
+
 
 	const navigateHandler = async () => {
 		loading = true;
@@ -2232,10 +2252,18 @@
 		: ' '} w-full max-w-full flex flex-col"
 	id="chat-container"
 >
+<!-- Modal pour la recherche manuelle -->
 <SearchResultsModal
 	bind:show={showSearchResultsModal}
 	results={searchResults}
 	on:manualRagConfirm={handleConfirmSelection}
+/>
+
+<!-- ✅ Modal pour voir les sources RAG -->
+<SearchResultsModal
+    bind:show={showRagSourcesModal}
+    results={ragSourcesData}
+    viewOnly={true}
 />
 	{#if !loading}
 		<div in:fade={{ duration: 50 }} class="w-full h-full flex flex-col">
@@ -2348,6 +2376,10 @@
 										topPadding={true}
 										bottomPadding={files.length > 0}
 										{onSelect}
+										on:showRagSources={(e) => {
+        ragSourcesData = e.detail.sources;
+        showRagSourcesModal = true;
+    }}
 									/>
 								</div>
 							</div>

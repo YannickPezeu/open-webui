@@ -1,4 +1,6 @@
 <script lang="ts">
+
+	
 	import { toast } from 'svelte-sonner';
 	import dayjs from 'dayjs';
 
@@ -53,6 +55,26 @@
 	import { flyAndScale } from '$lib/utils/transitions';
 	import RegenerateMenu from './ResponseMessage/RegenerateMenu.svelte';
 
+
+	const prepareRagSourcesForModal = () => {
+		const parentMessage = history.messages[message.parentId];
+		if (!parentMessage?.files) return [];
+		
+		const sources = parentMessage.files.filter(f => f.isRagSource);
+		
+		// Convertir au format attendu par SearchResultsModal
+		return sources.map(file => ({
+			title: file.source?.name || file.name.replace('Source: ', ''),
+			precise_content: file.content,
+			context_content: file.content,
+			file_url: file.url,
+			source_url: file.url,
+			score: 1,
+		}));
+	};
+	
+	// ✅ Compte les sources RAG du message parent
+	$: ragSourcesCount = history.messages[message.parentId]?.files?.filter(f => f.isRagSource).length || 0;
 
 const fakeSources = [
   {
@@ -659,6 +681,7 @@ const fakeSources = [
 		}
 	});
 </script>
+
 
 <DeleteConfirmDialog
 	bind:show={showDeleteConfirm}
@@ -1579,6 +1602,43 @@ const fakeSources = [
 									{/if}
 								{/if}
 							{/if}
+
+							{#if ragSourcesCount > 0}
+    <Tooltip content={$i18n.t('View RAG Sources ({{count}})', { count: ragSourcesCount })} placement="bottom">
+        <button
+            aria-label={$i18n.t('View RAG Sources')}
+            class="{isLastMessage || ($settings?.highContrastMode ?? false)
+                ? 'visible'
+                : 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition relative"
+            on:click={() => {
+                dispatch('showRagSources', {
+                    sources: prepareRagSourcesForModal()
+                });
+            }}
+        >
+            <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke-width="2.3"
+                stroke="currentColor"
+                class="w-4 h-4"
+            >
+                <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25"
+                />
+            </svg>
+            <!-- Badge avec le nombre de sources -->
+            {#if ragSourcesCount > 0}
+                <span class="absolute -top-1 -right-1 flex items-center justify-center size-4 text-[10px] font-bold text-white bg-sky-600 rounded-full">
+                    {ragSourcesCount}
+                </span>
+            {/if}
+        </button>
+    </Tooltip>
+{/if}
 						{/if}
 					</div>
 

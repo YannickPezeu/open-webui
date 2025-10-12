@@ -448,6 +448,7 @@
 								{triggerScroll}
 								{readOnly}
 								{topPadding}
+								on:showRagSources
 							/>
 						{/each}
 					</ul>
