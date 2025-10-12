@@ -99,6 +99,9 @@
 	let showRagSourcesModal = false;
 	let ragSourcesData = [];
 
+	let ragSearchEnabled = false;
+let ragExpertMode = false;
+
   let pendingRagQuery = '';
   let isExpertModeSubmission = false;
 
@@ -127,7 +130,7 @@
     const data = await searchDocuments(
       $user.token,
       query,
-      'test_enrichment_html',
+      'LEX_FR',
       password
     );
 
@@ -2388,55 +2391,56 @@
 								
 
 								<MessageInput
-									bind:this={messageInput}
-									{history}
-									{taskIds}
-									{selectedModels}
-									bind:files
-									bind:prompt
-									bind:autoScroll
-									bind:selectedToolIds
-									bind:selectedFilterIds
-									bind:imageGenerationEnabled
-									bind:codeInterpreterEnabled
-									bind:webSearchEnabled
-									bind:atSelectedModel
-									bind:showCommands
-									toolServers={$toolServers}
-									{generating}
-									{stopResponse}
-									{createMessagePair}
-									onChange={(data) => {
-										if (!$temporaryChatEnabled) {
-											saveDraft(data, $chatId);
-										}
-									}}
-									on:upload={async (e) => {
-										const { type, data } = e.detail;
+    bind:this={messageInput}
+    {history}
+    {taskIds}
+    {selectedModels}
+    bind:files
+    bind:prompt
+    bind:autoScroll
+    bind:selectedToolIds
+    bind:selectedFilterIds
+    bind:imageGenerationEnabled
+    bind:codeInterpreterEnabled
+    bind:webSearchEnabled
+    bind:ragSearchEnabled
+    bind:ragExpertMode
+    bind:atSelectedModel
+    bind:showCommands
+    toolServers={$toolServers}
+    {generating}
+    {stopResponse}
+    {createMessagePair}
+    onChange={(data) => {
+        if (!$temporaryChatEnabled) {
+            saveDraft(data, $chatId);
+        }
+    }}
+    on:upload={async (e) => {
+        const { type, data } = e.detail;
 
-										if (type === 'web') {
-											await uploadWeb(data);
-										} else if (type === 'youtube') {
-											await uploadYoutubeTranscription(data);
-										} else if (type === 'google-drive') {
-											await uploadGoogleDriveFile(data);
-										}
-									}}
-									on:manualRagSearch={handleSearchClick}
+        if (type === 'web') {
+            await uploadWeb(data);
+        } else if (type === 'youtube') {
+            await uploadYoutubeTranscription(data);
+        } else if (type === 'google-drive') {
+            await uploadGoogleDriveFile(data);
+        }
+    }}
+    on:manualRagSearch={handleSearchClick}
+    on:submit={async (e) => {
+        clearDraft();
+        if (e.detail || files.length > 0) {
+            await tick();
 
-									on:submit={async (e) => {
-										clearDraft();
-										if (e.detail || files.length > 0) {
-											await tick();
-
-											submitPrompt(
-												($settings?.richTextInput ?? true)
-													? e.detail.replaceAll('\n\n', '\n')
-													: e.detail
-											);
-										}
-									}}
-								/>
+            submitPrompt(
+                ($settings?.richTextInput ?? true)
+                    ? e.detail.replaceAll('\n\n', '\n')
+                    : e.detail
+            );
+        }
+    }}
+/>
 
 								<div
 									class="absolute bottom-1 text-xs text-gray-500 text-center line-clamp-1 right-0 left-0"
@@ -2447,51 +2451,52 @@
 						{:else}
 							<div class="flex items-center h-full">
 								<Placeholder
-									{history}
-									{selectedModels}
-									bind:messageInput
-									bind:files
-									bind:prompt
-									bind:autoScroll
-									bind:selectedToolIds
-									bind:selectedFilterIds
-									bind:imageGenerationEnabled
-									bind:codeInterpreterEnabled
-									bind:webSearchEnabled
-									bind:atSelectedModel
-									bind:showCommands
-									toolServers={$toolServers}
-									{stopResponse}
-									{createMessagePair}
-									{onSelect}
-									onChange={(data) => {
-										if (!$temporaryChatEnabled) {
-											saveDraft(data);
-										}
-									}}
-									on:manualRagSearch={handleSearchClick}
+    {history}
+    {selectedModels}
+    bind:messageInput
+    bind:files
+    bind:prompt
+    bind:autoScroll
+    bind:selectedToolIds
+    bind:selectedFilterIds
+    bind:imageGenerationEnabled
+    bind:codeInterpreterEnabled
+    bind:webSearchEnabled
+    bind:ragSearchEnabled
+    bind:ragExpertMode
+    bind:atSelectedModel
+    bind:showCommands
+    toolServers={$toolServers}
+    {stopResponse}
+    {createMessagePair}
+    {onSelect}
+    onChange={(data) => {
+        if (!$temporaryChatEnabled) {
+            saveDraft(data);
+        }
+    }}
+    on:manualRagSearch={handleSearchClick}
+    on:upload={async (e) => {
+        const { type, data } = e.detail;
 
-									on:upload={async (e) => {
-										const { type, data } = e.detail;
-
-										if (type === 'web') {
-											await uploadWeb(data);
-										} else if (type === 'youtube') {
-											await uploadYoutubeTranscription(data);
-										}
-									}}
-									on:submit={async (e) => {
-										clearDraft();
-										if (e.detail || files.length > 0) {
-											await tick();
-											submitPrompt(
-												($settings?.richTextInput ?? true)
-													? e.detail.replaceAll('\n\n', '\n')
-													: e.detail
-											);
-										}
-									}}
-								/>
+        if (type === 'web') {
+            await uploadWeb(data);
+        } else if (type === 'youtube') {
+            await uploadYoutubeTranscription(data);
+        }
+    }}
+    on:submit={async (e) => {
+        clearDraft();
+        if (e.detail || files.length > 0) {
+            await tick();
+            submitPrompt(
+                ($settings?.richTextInput ?? true)
+                    ? e.detail.replaceAll('\n\n', '\n')
+                    : e.detail
+            );
+        }
+    }}
+/>
 								
 							</div>
 						{/if}

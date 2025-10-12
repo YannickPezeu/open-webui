@@ -46,6 +46,9 @@
 	export let selectedToolIds = [];
 	export let selectedFilterIds = [];
 
+	export let ragSearchEnabled = false;
+    export let ragExpertMode = false;
+
 	export let showCommands = false;
 
 	export let imageGenerationEnabled = false;
@@ -205,34 +208,36 @@
 
 			<div class="text-base font-normal @md:max-w-3xl w-full py-3 {atSelectedModel ? 'mt-2' : ''}">
 				<MessageInput
-					bind:this={messageInput}
-					{history}
-					{selectedModels}
-					bind:files
-					bind:prompt
-					bind:autoScroll
-					bind:selectedToolIds
-					bind:selectedFilterIds
-					bind:imageGenerationEnabled
-					bind:codeInterpreterEnabled
-					bind:webSearchEnabled
-					bind:atSelectedModel
-					bind:showCommands
-					{toolServers}
-					{stopResponse}
-					{createMessagePair}
-					placeholder={$i18n.t('How can I help you today?')}
-					{onChange}
-					on:upload={(e) => {
-						dispatch('upload', e.detail);
-					}}
-					on:submit={(e) => {
-						dispatch('submit', e.detail);
-					}}
-					on:manualRagSearch={(e) => {
+    bind:this={messageInput}
+    {history}
+    {selectedModels}
+    bind:files
+    bind:prompt
+    bind:autoScroll
+    bind:selectedToolIds
+    bind:selectedFilterIds
+    bind:imageGenerationEnabled
+    bind:codeInterpreterEnabled
+    bind:webSearchEnabled
+    bind:ragSearchEnabled
+    bind:ragExpertMode
+    bind:atSelectedModel
+    bind:showCommands
+    {toolServers}
+    {stopResponse}
+    {createMessagePair}
+    placeholder={$i18n.t('How can I help you today?')}
+    {onChange}
+    on:upload={(e) => {
+        dispatch('upload', e.detail);
+    }}
+    on:submit={(e) => {
+        dispatch('submit', e.detail);
+    }}
+    on:manualRagSearch={(e) => {
         dispatch('manualRagSearch', e.detail);
     }}
-				/>
+/>
 			</div>
 		</div>
 	</div>

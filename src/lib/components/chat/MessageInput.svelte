@@ -130,8 +130,8 @@ import {
 
 	import RagSearchButton from './MessageInput/RagSearchButton.svelte';
 
-	let ragSearchEnabled = false;
-	let ragExpertMode = false;
+	export let ragSearchEnabled = false;
+	export let ragExpertMode = false;
 	let showRagTooltip = false;
 
  // 2. Add state variables for the modal
@@ -1011,7 +1011,7 @@ function buildPreciseUrl(result: any): string {
         const results = await searchDocuments(
           $_user.token,
           optimizedQuery,
-          'test_enrichment_html',
+          'LEX_FR',
           'supersecret'
         );
 
