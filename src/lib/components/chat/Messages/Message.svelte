@@ -118,6 +118,7 @@
 				{addMessages}
 				{readOnly}
 				{topPadding}
+				on:showRagSources
 			/>
 		{/if}
 	{/if}

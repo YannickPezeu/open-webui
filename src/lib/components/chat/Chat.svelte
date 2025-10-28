@@ -14,7 +14,8 @@
 	import type { i18n as i18nType } from 'i18next';
 	import { WEBUI_BASE_URL } from '$lib/constants';
 	import { searchDocuments } from '$lib/apis/manual_rag'; // Ajoutez cet import
-    import SearchResultsModal from './ManualRag/SearchResultsModal.svelte'; // 1. Import the modal
+	import SearchResultsModal from './ManualRag/SearchResultsModal.svelte'; // 1. Import the modal
+	import FirstVisitModal from './ManualRag/FirstVisitModal.svelte';
 	import {
 		chatId,
 		chats,
@@ -93,58 +94,247 @@
 
 	export let chatIdProp = '';
 
+	import { generateOptimizedRagQuery } from '$lib/apis/manual_rag';
+
+	import { RAG_CONFIG } from '$lib/constants';
 
 	let showSearchResultsModal = false;
 	let searchResults = [];
 	let showRagSourcesModal = false;
 	let ragSourcesData = [];
+	let selectedLibraryId = RAG_CONFIG.DEFAULT_LIBRARY_ID;
 
-	let ragSearchEnabled = false;
-let ragExpertMode = false;
+	let ragSearchEnabled = RAG_CONFIG.FORCE_RAG_ENABLED;
+	let ragExpertMode = RAG_CONFIG.DEFAULT_EXPERT_MODE;
 
-  let pendingRagQuery = '';
-  let isExpertModeSubmission = false;
+	let pendingRagQuery = '';
+	let isExpertModeSubmission = false;
+
+	function buildPreciseUrl(result: any): string {
+		const fileUrl = result.file_url;
+		const sourceUrl = result.source_url;
+
+		const isPdf = result.file_type === 'pdf' || fileUrl?.toLowerCase().endsWith('.pdf');
+		const isHtml =
+			['html', 'htm'].includes(result.file_type) ||
+			fileUrl?.toLowerCase().endsWith('.html') ||
+			fileUrl?.toLowerCase().endsWith('.htm');
+
+		if (isPdf) {
+			if (!fileUrl) return '#';
+
+			if (result.node_anchor_id) {
+				return `${fileUrl}#nameddest=${result.node_anchor_id}`;
+			}
+
+			if (result.page_number) {
+				return `${fileUrl}#page=${result.page_number}`;
+			}
+
+			return fileUrl;
+		}
+
+		if (isHtml) {
+			if (!sourceUrl) return fileUrl || '#';
+
+			if (result.search_text_start && result.search_text_end) {
+				const start = encodeURIComponent(result.search_text_start);
+				const end = encodeURIComponent(result.search_text_end);
+
+				if (result.search_text_start === result.search_text_end) {
+					return `${sourceUrl}#:~:text=${start}`;
+				}
+
+				return `${sourceUrl}#:~:text=${start},${end}`;
+			}
+
+			if (result.node_anchor_id) {
+				return `${sourceUrl}#${result.node_anchor_id}`;
+			}
+
+			return sourceUrl;
+		}
+
+		return fileUrl || '#';
+	}
 
 	const handleSearchClick = async (event) => {
-    const { query, results, expertMode } = event.detail;  // ✅ Récupère expertMode
-    
-    // Si on a déjà les résultats (mode expert), on les affiche directement
-    if (results && results.length > 0) {
-      searchResults = results;
-      pendingRagQuery = query;  // ✅ Stocke le query
-      isExpertModeSubmission = expertMode || false;  // ✅ Stocke le mode
-      showSearchResultsModal = true;
-      return;
-    }
-    
-    // Sinon (ancien comportement pour compatibilité)
-    if (!query?.trim()) {
-      toast.info('Please enter a search query in the message box.');
-      return;
-    }
+		const { query, results, expertMode, libraryId, conversationContext, modelId } = event.detail;
 
-    const userId = "test_user";
-    const indexId = "LEX_FR";
-    const password = "supersecret";
+		// Si on a déjà les résultats (ancien comportement pour compatibilité), les afficher
+		if (results && results.length > 0) {
+			searchResults = results;
+			pendingRagQuery = query;
+			isExpertModeSubmission = expertMode || false;
+			showSearchResultsModal = true;
+			return;
+		}
 
-    const data = await searchDocuments(
-      $user.token,
-      query,
-      'LEX_FR',
-      password
-    );
+		// ✅ NOUVEAU : Faire la recherche complète ici
+		if (!query?.trim()) {
+			toast.info('Please enter a search query in the message box.');
+			return;
+		}
 
-    if (data && data.length > 0) {
-      searchResults = data;
-      pendingRagQuery = query;  // ✅ Stocke le query
-      showSearchResultsModal = true;
-    }
-  };
+		if (!libraryId) {
+			toast.error('Please select a library first');
+			return;
+		}
 
-  
+		let searchToastId;
 
+		try {
+			// 1. Générer une requête optimisée avec le LLM
+			toast.info($i18n.t('Optimizing search query...'));
 
-	
+			const optimizedQuery = await generateOptimizedRagQuery(
+				$user.token,
+				query,
+				conversationContext || [],
+				'swiss-ai/Apertus-70B-Instruct-2509'
+			);
+
+			console.log('📝 Original query:', query);
+			console.log('🎯 Optimized query:', optimizedQuery);
+			console.log('📚 Using library:', libraryId);
+
+			// 2. Afficher la requête dans un toast persistant
+			searchToastId = toast.loading(
+				$i18n.t('Searching documents with: "{{query}}"', { query: optimizedQuery }),
+				{
+					duration: Infinity
+				}
+			);
+
+			// 3. Faire la recherche avec la bibliothèque sélectionnée
+			const data = await searchDocuments(
+				$user.token,
+				optimizedQuery,
+				libraryId,
+				undefined // Password optionnel
+			);
+
+			// 4. Dismiss le toast de recherche
+			toast.dismiss(searchToastId);
+
+			if (data && data.length > 0) {
+				toast.success($i18n.t('{{count}} results found', { count: data.length }));
+
+				searchResults = data;
+				pendingRagQuery = query;
+				isExpertModeSubmission = expertMode || false;
+
+				// Mode expert : afficher le modal pour sélection manuelle
+				if (expertMode) {
+					showSearchResultsModal = true;
+				} else {
+					// ✅ Mode auto : Préparer les sources
+					const autoSelectedDocs = data.slice(0, 10).map((result) => {
+						const preciseUrl = buildPreciseUrl(result);
+						return {
+							type: 'text',
+							id: uuidv4(),
+							name: result.title,
+							content: result.context_content,
+							status: 'uploaded',
+							url: preciseUrl,
+							isRagSource: true,
+							source: {
+								url: preciseUrl,
+								name: result.title
+							}
+						};
+					});
+
+					console.log('📎 Adding sources:', autoSelectedDocs.length);
+
+					// ✅ SOLUTION 3 : Soumettre directement avec les sources
+					// Au lieu d'ajouter à files puis attendre tick() et espérer que ça marche,
+					// on ajoute les sources ET on soumet en une seule opération atomique
+					await submitPromptWithSources(query, autoSelectedDocs);
+
+					toast.success(
+						$i18n.t('{{count}} sources added and message sent.', {
+							count: autoSelectedDocs.length
+						})
+					);
+				}
+			} else {
+				toast.info($i18n.t('No results found for RAG search.'));
+			}
+		} catch (error) {
+			console.error('RAG search error:', error);
+
+			if (searchToastId) {
+				toast.dismiss(searchToastId);
+			}
+
+			toast.error($i18n.t('Error performing RAG search'));
+		}
+	};
+
+	// ✅ Nouvelle fonction helper pour soumettre avec des sources
+	const submitPromptWithSources = async (userPrompt, sources = []) => {
+		console.log('🚀 submitPromptWithSources called', {
+			prompt: userPrompt,
+			sourcesCount: sources.length,
+			currentFilesCount: files.length
+		});
+
+		// Validation de base
+		if (!userPrompt?.trim() && sources.length === 0) {
+			toast.error($i18n.t('Please enter a prompt'));
+			return false;
+		}
+
+		// Vérifier que les modèles sont sélectionnés
+		const _selectedModels = selectedModels.map((modelId) =>
+			$models.map((m) => m.id).includes(modelId) ? modelId : ''
+		);
+		if (_selectedModels.includes('')) {
+			toast.error($i18n.t('Model not selected'));
+			return false;
+		}
+
+		// Vérifier qu'il n'y a pas de génération en cours
+		const messages = createMessagesList(history, history.currentId);
+		if (messages.length != 0 && messages.at(-1).done != true) {
+			toast.error($i18n.t('Please wait for the current response to complete'));
+			return false;
+		}
+
+		// ✅ Ajouter les sources aux fichiers existants
+		files = [...files, ...sources];
+		console.log('📎 Files after adding sources:', files.length);
+
+		// Attendre que Svelte mette à jour le DOM
+		await tick();
+
+		// ✅ Vérifier que les fichiers sont bien présents
+		if (files.length < sources.length) {
+			console.error('❌ Files not properly added', {
+				expected: sources.length,
+				actual: files.length
+			});
+			toast.error($i18n.t('Error adding sources. Please try again.'));
+			return false;
+		}
+
+		try {
+			// ✅ Appeler submitPrompt normalement - elle va utiliser la variable files
+			await submitPrompt(userPrompt);
+			console.log('✅ Message submitted successfully with sources');
+			return true;
+		} catch (error) {
+			console.error('❌ Error submitting prompt with sources:', error);
+			toast.error($i18n.t('Error sending message. Please try again.'));
+
+			// En cas d'erreur, retirer les sources ajoutées
+			files = files.filter((f) => !sources.some((s) => s.id === f.id));
+			return false;
+		}
+	};
+
 	// The handler for adding sources to files is already correct
 
 	let loading = true;
@@ -208,24 +398,25 @@ let ragExpertMode = false;
 	}
 
 	const handleConfirmSelection = async (event) => {
-    const newSourceFiles = event.detail;
+		const newSourceFiles = event.detail;
 
-    // Add the new sources to the main files array
-    files = [...files, ...newSourceFiles];
+		// Add the new sources to the main files array
+		files = [...files, ...newSourceFiles];
 
-    toast.success($i18n.t('{{count}} sources added to the context.', { count: newSourceFiles.length }));
+		toast.success(
+			$i18n.t('{{count}} sources added to the context.', { count: newSourceFiles.length })
+		);
 
-    // ✅ Si on est en mode expert, soumettre automatiquement
-    if (isExpertModeSubmission && pendingRagQuery) {
-      await tick();
-      submitPrompt(pendingRagQuery);
-      
-      // Reset les variables
-      pendingRagQuery = '';
-      isExpertModeSubmission = false;
-    }
-  };
+		// ✅ Si on est en mode expert, soumettre automatiquement
+		if (isExpertModeSubmission && pendingRagQuery) {
+			await tick();
+			submitPrompt(pendingRagQuery);
 
+			// Reset les variables
+			pendingRagQuery = '';
+			isExpertModeSubmission = false;
+		}
+	};
 
 	const navigateHandler = async () => {
 		loading = true;
@@ -375,7 +566,6 @@ let ragExpertMode = false;
 	};
 
 	const chatEventHandler = async (event, cb) => {
-
 		if (event.chat_id === $chatId) {
 			await tick();
 			let message = history.messages[event.message_id];
@@ -2247,7 +2437,7 @@ let ragExpertMode = false;
 	}}
 />
 
-
+<FirstVisitModal />
 
 <div
 	class="h-screen max-h-[100dvh] transition-width duration-200 ease-in-out {$showSidebar
@@ -2255,19 +2445,15 @@ let ragExpertMode = false;
 		: ' '} w-full max-w-full flex flex-col"
 	id="chat-container"
 >
-<!-- Modal pour la recherche manuelle -->
-<SearchResultsModal
-	bind:show={showSearchResultsModal}
-	results={searchResults}
-	on:manualRagConfirm={handleConfirmSelection}
-/>
+	<!-- Modal pour la recherche manuelle -->
+	<SearchResultsModal
+		bind:show={showSearchResultsModal}
+		results={searchResults}
+		on:manualRagConfirm={handleConfirmSelection}
+	/>
 
-<!-- ✅ Modal pour voir les sources RAG -->
-<SearchResultsModal
-    bind:show={showRagSourcesModal}
-    results={ragSourcesData}
-    viewOnly={true}
-/>
+	<!-- ✅ Modal pour voir les sources RAG -->
+	<SearchResultsModal bind:show={showRagSourcesModal} results={ragSourcesData} viewOnly={true} />
 	{#if !loading}
 		<div in:fade={{ duration: 50 }} class="w-full h-full flex flex-col">
 			{#if $settings?.backgroundImageUrl ?? $config?.license_metadata?.background_image_url ?? null}
@@ -2380,67 +2566,66 @@ let ragExpertMode = false;
 										bottomPadding={files.length > 0}
 										{onSelect}
 										on:showRagSources={(e) => {
-        ragSourcesData = e.detail.sources;
-        showRagSourcesModal = true;
-    }}
+											ragSourcesData = e.detail.sources;
+											showRagSourcesModal = true;
+										}}
 									/>
 								</div>
 							</div>
 
 							<div class=" pb-2">
-								
-
 								<MessageInput
-    bind:this={messageInput}
-    {history}
-    {taskIds}
-    {selectedModels}
-    bind:files
-    bind:prompt
-    bind:autoScroll
-    bind:selectedToolIds
-    bind:selectedFilterIds
-    bind:imageGenerationEnabled
-    bind:codeInterpreterEnabled
-    bind:webSearchEnabled
-    bind:ragSearchEnabled
-    bind:ragExpertMode
-    bind:atSelectedModel
-    bind:showCommands
-    toolServers={$toolServers}
-    {generating}
-    {stopResponse}
-    {createMessagePair}
-    onChange={(data) => {
-        if (!$temporaryChatEnabled) {
-            saveDraft(data, $chatId);
-        }
-    }}
-    on:upload={async (e) => {
-        const { type, data } = e.detail;
+									bind:this={messageInput}
+									{history}
+									{taskIds}
+									{selectedModels}
+									bind:files
+									bind:prompt
+									bind:autoScroll
+									bind:selectedToolIds
+									bind:selectedFilterIds
+									bind:imageGenerationEnabled
+									bind:codeInterpreterEnabled
+									bind:webSearchEnabled
+									bind:ragSearchEnabled
+									bind:ragExpertMode
+									bind:selectedLibraryId
+									bind:atSelectedModel
+									bind:showCommands
+									toolServers={$toolServers}
+									{generating}
+									{stopResponse}
+									{createMessagePair}
+									onChange={(data) => {
+										if (!$temporaryChatEnabled) {
+											saveDraft(data, $chatId);
+										}
+									}}
+									on:upload={async (e) => {
+										const { type, data } = e.detail;
 
-        if (type === 'web') {
-            await uploadWeb(data);
-        } else if (type === 'youtube') {
-            await uploadYoutubeTranscription(data);
-        } else if (type === 'google-drive') {
-            await uploadGoogleDriveFile(data);
-        }
-    }}
-    on:manualRagSearch={handleSearchClick}
-    on:submit={async (e) => {
-        clearDraft();
-        if (e.detail || files.length > 0) {
-            await tick();
+										if (type === 'web') {
+											await uploadWeb(data);
+										} else if (type === 'youtube') {
+											await uploadYoutubeTranscription(data);
+										} else if (type === 'google-drive') {
+											await uploadGoogleDriveFile(data);
+										}
+									}}
+									on:manualRagSearch={handleSearchClick}
+									on:submit={async (e) => {
+										clearDraft();
+										if (e.detail || files.length > 0) {
+											await tick();
 
-            submitPrompt(
-                ($settings?.richTextInput ?? true)
-                    ? e.detail.replaceAll('\n\n', '\n')
-                    : e.detail
-            );
-        }
-    }}
-/>
+											submitPrompt(
+												($settings?.richTextInput ?? true)
+													? e.detail.replaceAll('\n\n', '\n')
+													: e.detail
+											);
+										}
+									}}
+								/>
 
 								<div
 									class="absolute bottom-1 text-xs text-gray-500 text-center line-clamp-1 right-0 left-0"
@@ -2451,53 +2636,53 @@ let ragExpertMode = false;
 						{:else}
 							<div class="flex items-center h-full">
 								<Placeholder
-    {history}
-    {selectedModels}
-    bind:messageInput
-    bind:files
-    bind:prompt
-    bind:autoScroll
-    bind:selectedToolIds
-    bind:selectedFilterIds
-    bind:imageGenerationEnabled
-    bind:codeInterpreterEnabled
-    bind:webSearchEnabled
-    bind:ragSearchEnabled
-    bind:ragExpertMode
-    bind:atSelectedModel
-    bind:showCommands
-    toolServers={$toolServers}
-    {stopResponse}
-    {createMessagePair}
-    {onSelect}
-    onChange={(data) => {
-        if (!$temporaryChatEnabled) {
-            saveDraft(data);
-        }
-    }}
-    on:manualRagSearch={handleSearchClick}
-    on:upload={async (e) => {
-        const { type, data } = e.detail;
+									{history}
+									{selectedModels}
+									bind:messageInput
+									bind:files
+									bind:prompt
+									bind:autoScroll
+									bind:selectedToolIds
+									bind:selectedFilterIds
+									bind:imageGenerationEnabled
+									bind:codeInterpreterEnabled
+									bind:webSearchEnabled
+									bind:ragSearchEnabled
+									bind:ragExpertMode
+									bind:atSelectedModel
+									bind:showCommands
+									bind:selectedLibraryId
+									toolServers={$toolServers}
+									{stopResponse}
+									{createMessagePair}
+									{onSelect}
+									onChange={(data) => {
+										if (!$temporaryChatEnabled) {
+											saveDraft(data);
+										}
+									}}
+									on:manualRagSearch={handleSearchClick}
+									on:upload={async (e) => {
+										const { type, data } = e.detail;
 
-        if (type === 'web') {
-            await uploadWeb(data);
-        } else if (type === 'youtube') {
-            await uploadYoutubeTranscription(data);
-        }
-    }}
-    on:submit={async (e) => {
-        clearDraft();
-        if (e.detail || files.length > 0) {
-            await tick();
-            submitPrompt(
-                ($settings?.richTextInput ?? true)
-                    ? e.detail.replaceAll('\n\n', '\n')
-                    : e.detail
-            );
-        }
-    }}
-/>
-								
+										if (type === 'web') {
+											await uploadWeb(data);
+										} else if (type === 'youtube') {
+											await uploadYoutubeTranscription(data);
+										}
+									}}
+									on:submit={async (e) => {
+										clearDraft();
+										if (e.detail || files.length > 0) {
+											await tick();
+											submitPrompt(
+												($settings?.richTextInput ?? true)
+													? e.detail.replaceAll('\n\n', '\n')
+													: e.detail
+											);
+										}
+									}}
+								/>
 							</div>
 						{/if}
 					</div>

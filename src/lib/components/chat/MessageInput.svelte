@@ -16,7 +16,6 @@
 	import { onMount, tick, getContext, createEventDispatcher, onDestroy } from 'svelte';
 	const dispatch = createEventDispatcher();
 	import { searchDocuments } from '$lib/apis/manual_rag'; // Ajoutez cet import
-	import { generateOptimizedRagQuery } from '$lib/apis/manual_rag';
 	import {
 		type Model,
 		mobile,
@@ -32,6 +31,10 @@
 		modelsLoaded,
 		temporaryChatEnabled
 	} from '$lib/stores';
+
+	import { RAG_CONFIG } from '$lib/constants';
+
+	
 
 import {
   areSelectedModelsLoaded,
@@ -129,9 +132,9 @@ import {
 
 
 	import RagSearchButton from './MessageInput/RagSearchButton.svelte';
-
-	export let ragSearchEnabled = false;
-	export let ragExpertMode = false;
+	export let selectedLibraryId = RAG_CONFIG.DEFAULT_LIBRARY_ID;
+	export let ragSearchEnabled = RAG_CONFIG.FORCE_RAG_ENABLED;
+	export let ragExpertMode = RAG_CONFIG.DEFAULT_EXPERT_MODE;
 	let showRagTooltip = false;
 
  // 2. Add state variables for the modal
@@ -152,8 +155,8 @@ import {
 	// Ajoutez cette variable réactive avec les autres (vers la ligne 218)
 	let showRagSearchButton = false;
 	console.log('user', $_user);
-	$: showRagSearchButton = $_user?.role === 'admin' || $_user?.permissions?.features?.rag_search;
-
+	// $: showRagSearchButton = $_user?.role === 'admin' || $_user?.permissions?.features?.rag_search;
+	$: showRagSearchButton = true; // Pour le moment, activé pour tous les utilisateurs
 
 
 
@@ -916,52 +919,7 @@ import {
 
 // src/lib/components/chat/MessageInput.svelte
 
-function buildPreciseUrl(result: any): string {
-    const fileUrl = result.file_url;
-    const sourceUrl = result.source_url;
-    
-    const isPdf = result.file_type === 'pdf' || fileUrl?.toLowerCase().endsWith('.pdf');
-    const isHtml = ['html', 'htm'].includes(result.file_type) || 
-                   fileUrl?.toLowerCase().endsWith('.html') || 
-                   fileUrl?.toLowerCase().endsWith('.htm');
-    
-    if (isPdf) {
-      if (!fileUrl) return '#';
-      
-      if (result.node_anchor_id) {
-        return `${fileUrl}#nameddest=${result.node_anchor_id}`;
-      }
-      
-      if (result.page_number) {
-        return `${fileUrl}#page=${result.page_number}`;
-      }
-      
-      return fileUrl;
-    }
-    
-    if (isHtml) {
-      if (!sourceUrl) return fileUrl || '#';
-      
-      if (result.search_text_start && result.search_text_end) {
-        const start = encodeURIComponent(result.search_text_start);
-        const end = encodeURIComponent(result.search_text_end);
-        
-        if (result.search_text_start === result.search_text_end) {
-          return `${sourceUrl}#:~:text=${start}`;
-        }
-        
-        return `${sourceUrl}#:~:text=${start},${end}`;
-      }
-      
-      if (result.node_anchor_id) {
-        return `${sourceUrl}#${result.node_anchor_id}`;
-      }
-      
-      return sourceUrl;
-    }
-    
-    return fileUrl || '#';
-  }
+
 
   const handleSubmit = async () => {
     if (prompt === '' && files.length === 0) {
@@ -975,94 +933,33 @@ function buildPreciseUrl(result: any): string {
       return;
     }
 
-    // Si RAG Search est activé, on effectue la recherche d'abord
+    // ✅ Si RAG Search est activé, dispatcher un event au lieu de faire la recherche ici
     if (ragSearchEnabled && prompt.trim()) {
-      let searchToastId; // ✅ Variable pour stocker l'ID du toast
-      
-      try {
-        // 1. Générer une requête optimisée avec le LLM
-        toast.info($i18n.t('Optimizing search query...'));
-        
-        const conversationContext = history?.currentId 
+      if (!selectedLibraryId) {
+        toast.error($i18n.t('Please select a library first'));
+        return;
+      }
+
+      // ✅ Dispatcher l'event avec toutes les infos nécessaires
+      dispatch('manualRagSearch', { 
+        query: prompt,
+        libraryId: selectedLibraryId,
+        expertMode: ragExpertMode,
+        conversationContext: history?.currentId 
           ? createMessagesList(history, history.currentId).map(msg => ({
               role: msg.role,
               content: msg.content
             }))
-          : [];
-
-        const optimizedQuery = await generateOptimizedRagQuery(
-          localStorage.token,
-          prompt,
-          conversationContext,
-          targetModelIds[0]
-        );
-
-        console.log('📝 Original query:', prompt);
-        console.log('🎯 Optimized query:', optimizedQuery);
-
-        // ✅ 2. Afficher la requête dans un toast persistant
-        searchToastId = toast.loading(
-          $i18n.t('Searching documents with: "{{query}}"', { query: optimizedQuery }),
-          {
-            duration: Infinity // ✅ Garder le toast jusqu'à ce qu'on le dismiss manuellement
-          }
-        );
-        
-        const results = await searchDocuments(
-          $_user.token,
-          optimizedQuery,
-          'LEX_FR',
-          'supersecret'
-        );
-
-        // ✅ 3. Dismiss le toast de recherche et afficher le succès
-        toast.dismiss(searchToastId);
-
-        if (results && results.length > 0) {
-          toast.success($i18n.t('{{count}} results found', { count: results.length }));
-          
-          if (ragExpertMode) {
-            dispatch('manualRagSearch', { 
-              query: prompt,
-              optimizedQuery: optimizedQuery,
-              results: results,
-              expertMode: true
-            });
-            return;
-          } else {
-            const autoSelectedDocs = results.slice(0, 10).map((result) => {
-              const preciseUrl = buildPreciseUrl(result);
-              return {
-                type: 'text',
-                id: uuidv4(),
-                name: `Source: ${result.title}`,
-                content: result.context_content,
-                status: 'uploaded',
-                url: preciseUrl,
-			    isRagSource: true,  // ✅ Ajout du flag
-
-                source: {
-                  url: preciseUrl,
-                  name: result.title
-                }
-              };
-            });
-            
-            files = [...files, ...autoSelectedDocs];
-            toast.success($i18n.t('{{count}} sources added automatically.', { count: autoSelectedDocs.length }));
-          }
-        } else {
-          toast.info($i18n.t('No results found for RAG search.'));
-        }
-      } catch (error) {
-        console.error('RAG search error:', error);
-        
-        // ✅ Dismiss le toast de recherche en cas d'erreur
-        if (searchToastId) {
-          toast.dismiss(searchToastId);
-        }
-        
-        toast.error($i18n.t('Error performing RAG search'));
+          : [],
+        modelId: targetModelIds[0]
+      });
+      
+      // ✅ En mode auto, ne pas soumettre maintenant - attendre que les sources soient ajoutées
+      // En mode expert, l'utilisateur choisira manuellement
+      if (!ragExpertMode) {
+        return; // Attendre que handleConfirmSelection soumette
+      } else {
+        return; // L'utilisateur soumettra manuellement après avoir choisi
       }
     }
 
@@ -2057,10 +1954,11 @@ function buildPreciseUrl(result: any): string {
 					</Tooltip>
 				{/if}
 
-				{#if showRagSearchButton}
+				{#if showRagSearchButton && RAG_CONFIG.SHOW_RAG_BUTTON}
   <RagSearchButton
     bind:ragSearchEnabled
     bind:ragExpertMode
+	bind:selectedLibraryId
     onClose={async () => {
       await tick();
       const chatInput = document.getElementById('chat-input');

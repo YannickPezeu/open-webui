@@ -22,7 +22,11 @@
 		if (citations[sourceIdx]) {
 			selectedCitation = citations[sourceIdx];
 			showCitationModal = true;
-		}
+			console.log('citations:', citations);
+			console.log('selectedCitation:', selectedCitation);
+		}else {
+        console.error('❌ Index hors limites !', sourceIdx, 'vs', citations.length);
+    }
 	};
 
 	function calculateShowRelevance(sources: any[]) {
@@ -71,13 +75,13 @@
 					_source = { ..._source, name: id, url: id };
 				}
 
-				const existingSource = acc.find((item) => item.id === id);
+				// const existingSource = acc.find((item) => item.id === id);
 
-				if (existingSource) {
-					existingSource.document.push(document);
-					existingSource.metadata.push(metadata);
-					if (distance !== undefined) existingSource.distances.push(distance);
-				} else {
+				// if (existingSource) {
+				// 	existingSource.document.push(document);
+				// 	existingSource.metadata.push(metadata);
+				// 	if (distance !== undefined) existingSource.distances.push(distance);
+				// } else {
 					acc.push({
 						id: id,
 						source: _source,
@@ -85,7 +89,7 @@
 						metadata: metadata ? [metadata] : [],
 						distances: distance !== undefined ? [distance] : undefined
 					});
-				}
+				// }
 			});
 			return acc;
 		}, []);

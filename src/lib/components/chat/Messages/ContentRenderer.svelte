@@ -167,7 +167,8 @@
 			acc = [...acc, ...ids];
 
 			// remove duplicates
-			return acc.filter((item, index) => acc.indexOf(item) === index);
+			// return acc.filter((item, index) => acc.indexOf(item) === index);
+			return acc;
 		}, [])}
 		{onSourceClick}
 		{onTaskClick}

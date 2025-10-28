@@ -48,6 +48,7 @@
 
 	export let ragSearchEnabled = false;
     export let ragExpertMode = false;
+	export let selectedLibraryId = '';
 
 	export let showCommands = false;
 
@@ -223,6 +224,7 @@
     bind:ragExpertMode
     bind:atSelectedModel
     bind:showCommands
+	bind:selectedLibraryId
     {toolServers}
     {stopResponse}
     {createMessagePair}

@@ -324,6 +324,7 @@
 									{addMessages}
 									{readOnly}
 									{topPadding}
+									on:showRagSources
 								/>
 							{/if}
 						{/key}
@@ -380,6 +381,7 @@
 										{addMessages}
 										{readOnly}
 										{topPadding}
+										on:showRagSources
 									/>
 								{/if}
 							{/key}

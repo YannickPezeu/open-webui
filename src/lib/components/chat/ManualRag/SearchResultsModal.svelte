@@ -147,7 +147,7 @@
 			return {
 				type: 'text',
 				id: uuidv4(),
-				name: `Source: ${result.title}`,
+				name: `${result.title}`,
 				// ✅ Utiliser context_content pour le LLM (plus de contexte)
 				content: result.context_content,
 				status: 'uploaded',
@@ -156,7 +156,7 @@
 				source: {
 					url: preciseUrl,
 					name: result.title
-				}
+				},
 			};
 		});
 
@@ -242,6 +242,8 @@
 
 			<div class="max-h-[60vh] space-y-4 overflow-y-auto pr-2">
 				{#each results as result, i}
+
+				{console.log('Modal SVELTE rendering with score:', result.score) || ''}
 					{@const checkboxId = `result-checkbox-${i}`}
 					{@const isExpanded = expandedIndices.includes(i)}
 					
@@ -295,11 +297,7 @@
 										{result.title}
 									</a>
 
-									{#if result.score}
-										<span class="rounded-full bg-sky-100 px-2.5 py-0.5 font-medium text-sky-800 dark:bg-sky-900 dark:text-sky-300">
-											Relevance: {(result.score * 100).toFixed(1)}%
-										</span>
-									{/if}
+
 								</div>
 								
 								<!-- ✅ Affichage UNIQUEMENT de precise_content (tronqué ou complet) -->

@@ -36,6 +36,43 @@ def get_user_group_names(user_id: str) -> List[str]:
     return group_names
 
 
+@router.get("/list")
+async def list_libraries(user: Users = Depends(get_current_user)):
+    """
+    Récupère toutes les bibliothèques accessibles par l'utilisateur.
+    """
+    logger.info(f"📚 User {user.email} requesting library list")
+    
+    user_group_names = get_user_group_names(user.id)
+    logger.info(f"User groups: {user_group_names}")
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{LIBRARY_API_URL}/libraries/",
+                headers={"X-API-Key": LIBRARY_API_KEY},
+                params={"user_groups": ",".join(user_group_names)}
+            )
+            
+            if response.status_code != 200:
+                error_detail = response.json().get("detail", "Unknown error")
+                logger.error(f"Failed to fetch libraries: {error_detail}")
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=error_detail
+                )
+            
+            libraries = response.json()
+            logger.info(f"✅ Found {libraries.get('total_count', 0)} accessible libraries")
+            return libraries
+            
+    except httpx.TimeoutException:
+        logger.error("Timeout calling library API")
+        raise HTTPException(status_code=504, detail="Library service request timed out")
+    except httpx.RequestError as e:
+        logger.error(f"Error calling library API: {e}")
+        raise HTTPException(status_code=503, detail="Library service unavailable")
+
 @router.post("/{library_id}/search")
 async def search_library(
     library_id: str,

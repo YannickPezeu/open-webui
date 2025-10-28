@@ -69,7 +69,6 @@
 			context_content: file.content,
 			file_url: file.url,
 			source_url: file.url,
-			score: 1,
 		}));
 	};
 	
@@ -914,7 +913,8 @@ const fakeSources = [
 											console.log(e);
 										}}
 										onSourceClick={async (id, idx) => {
-											console.log(id, idx);
+											console.log('📍 ResponseMessage onSourceClick - id:', id, 'idx:', idx, 'type:', typeof idx);
+    console.log('📍 Converted to:', idx - 1);
 
 											if (citationsElement) {
 												citationsElement?.showSourceModal(idx - 1);

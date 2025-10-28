@@ -3,6 +3,8 @@
 	import Modal from '$lib/components/common/Modal.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
+	import { marked } from 'marked';  // ✅ Ajouter cet import
+	import DOMPurify from 'dompurify';  // ✅ Ajouter cet import
 
 	import XMark from '$lib/components/icons/XMark.svelte';
 	import Textarea from '$lib/components/common/Textarea.svelte';
@@ -31,6 +33,13 @@
 		if (percentage >= 40)
 			return 'bg-orange-200 dark:bg-orange-800 text-orange-800 dark:text-orange-200';
 		return 'bg-red-200 dark:bg-red-800 text-red-800 dark:text-red-200';
+	}
+
+	// ✅ Fonction pour parser et sanitizer le Markdown
+	function renderMarkdown(text: string): string {
+		if (!text) return '';
+		const html = marked.parse(text);
+		return DOMPurify.sanitize(html);
 	}
 
 	$: if (citation) {
@@ -86,34 +95,34 @@
 
 						{#if document.source?.name}
 							<Tooltip
-								className="w-fit"
-								content={$i18n.t('Open file')}
-								placement="top-start"
-								tippyOptions={{ duration: [500, 0] }}
-							>
-								<div class="text-sm dark:text-gray-400 flex items-center gap-2 w-fit">
-<a
-    class="hover:text-gray-500 dark:hover:text-gray-100 underline grow"
-    href={
-        (document.source?.url?.includes('http'))
-            ? `${document.source.url}${document?.metadata?.page !== undefined ? `#page=${document.metadata.page + 1}` : ''}`
-            : (document.metadata?.source?.includes('http'))
-                ? `${document.metadata.source}${document?.metadata?.page !== undefined ? `#page=${document.metadata.page + 1}` : ''}`
-                : document?.metadata?.file_id
-                    ? `${WEBUI_API_BASE_URL}/files/${document?.metadata?.file_id}/content${document?.metadata?.page !== undefined ? `#page=${document.metadata.page + 1}` : ''}`
-                    : '#'
-    }
-    target="_blank"
+    className="w-fit"
+    content={$i18n.t('Open file')}
+    placement="top-start"
+    tippyOptions={{ duration: [500, 0] }}
 >
-    {decodeString(document?.metadata?.name ?? document.source.name)}
-</a>
-    {#if Number.isInteger(document?.metadata?.page)}
-        <span class="text-xs text-gray-500 dark:text-gray-400">
-            ({$i18n.t('page')}
-            {document.metadata.page + 1})
-        </span>
-    {/if}
-</div>
+    <div class="text-sm dark:text-gray-400 flex items-center gap-2 w-fit">
+        
+            <a class="hover:text-gray-500 dark:hover:text-gray-100 underline grow"
+            href={
+                (document.source?.url?.includes('http'))
+                    ? `${document.source.url}${document?.metadata?.page !== undefined ? `#page=${document.metadata.page + 1}` : ''}`
+                    : (document.metadata?.source?.includes('http'))
+                        ? `${document.metadata.source}${document?.metadata?.page !== undefined ? `#page=${document.metadata.page + 1}` : ''}`
+                        : document?.metadata?.file_id
+                            ? `${WEBUI_API_BASE_URL}/files/${document?.metadata?.file_id}/content${document?.metadata?.page !== undefined ? `#page=${document.metadata.page + 1}` : ''}`
+                            : '#'
+            }
+            target="_blank"
+        >
+            {decodeString(document?.metadata?.name ?? document.source.name)}
+        </a>
+									{#if Number.isInteger(document?.metadata?.page)}
+										<span class="text-xs text-gray-500 dark:text-gray-400">
+											({$i18n.t('page')}
+											{document.metadata.page + 1})
+										</span>
+									{/if}
+								</div>
 							</Tooltip>
 							{#if document.metadata?.parameters}
 								<div class="text-sm font-medium dark:text-gray-300 mt-2 mb-0.5">
@@ -175,6 +184,7 @@
 							{$i18n.t('Content')}
 						</div>
 						{#if document.metadata?.html}
+							<!-- ✅ Cas 1: HTML dans iframe (inchangé) -->
 							<iframe
 								class="w-full border-0 h-auto rounded-none"
 								sandbox="allow-scripts allow-forms allow-same-origin"
@@ -182,9 +192,10 @@
 								title={$i18n.t('Content')}
 							></iframe>
 						{:else}
-							<pre class="text-sm dark:text-gray-400 whitespace-pre-line">
-                {document.document}
-              </pre>
+							<!-- ✅ Cas 2: Markdown formaté avec style prose -->
+							<div class="prose dark:prose-invert max-w-none text-sm">
+								{@html renderMarkdown(document.document)}
+							</div>
 						{/if}
 					</div>
 

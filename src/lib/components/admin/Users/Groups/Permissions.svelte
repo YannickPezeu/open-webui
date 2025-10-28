@@ -42,7 +42,7 @@
 			image_generation: true,
 			code_interpreter: true,
 			notes: true,
-			rag_search: false  
+			rag_search: true  
 
 		}
 	};

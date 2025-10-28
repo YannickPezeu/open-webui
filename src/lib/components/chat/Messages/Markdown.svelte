@@ -38,6 +38,9 @@
 
 	$: (async () => {
 		if (content) {
+			console.log('🔍 sourceIds in Markdown.svelte:', sourceIds); // ✅ Ajoutez ceci
+        	console.log('🔍 sourceIds length:', sourceIds?.length); // ✅ Et ceci
+        
 			tokens = marked.lexer(
 				replaceTokens(processResponseContent(content), sourceIds, model?.name, $user?.name)
 			);

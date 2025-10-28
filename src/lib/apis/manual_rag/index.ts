@@ -1,6 +1,28 @@
 import { toast } from 'svelte-sonner';
 import { WEBUI_API_BASE_URL } from '$lib/constants';
 
+export const getAvailableLibraries = async (token: string) => {
+    try {
+        const res = await fetch(`${WEBUI_API_BASE_URL}/libraries/list`, {
+            method: 'GET',
+            headers: {
+                authorization: `Bearer ${token}`
+            }
+        });
+
+        if (!res.ok) {
+            const error = await res.json();
+            throw new Error(error.detail || 'Failed to fetch libraries');
+        }
+
+        return await res.json();
+    } catch (err) {
+        console.error('Failed to fetch libraries:', err);
+        toast.error(`Failed to load libraries: ${err.message}`);
+        return null;
+    }
+};
+
 export const searchDocuments = async (
     token: string,
     query: string,
@@ -68,6 +90,7 @@ export const generateOptimizedRagQuery = async (
 	conversationHistory: any[] = [],
 	modelId: string
 ): Promise<string> => {
+    console.log('modelId for optimization:', modelId);
 	const systemPrompt = `You are a search query optimizer for an EPFL (École Polytechnique Fédérale de Lausanne) document retrieval system. The search engine uses semantic embeddings and reranking to find relevant documents from EPFL's internal knowledge base.
 
 Your task is to transform the user's question into an optimized search query that will retrieve the most relevant EPFL documents.
