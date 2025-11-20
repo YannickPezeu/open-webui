@@ -100,25 +100,26 @@ export const PASTED_TEXT_CHARACTER_LIMIT = 1000;
 
 export const FIRST_VISIT_MODAL = {
   ENABLED: true,
-  TITLE: "Bienvenue sur LEX Assistant",
+  TITLE: "Bienvenue sur Apertus LEX",
   MESSAGE: `
 **Important : Version de test**
 
-Bonjour, bienvenue sur la version test d’Apertus !  
+Bonjour, bienvenue sur la version test d'Apertus !  
 
-Apertus a été utilisé ici pour tous vous aider à accéder rapidement aux informations du Polylex et à les traiter comme vous le souhaitez. Nous vous encourageons à tester l’outils pour nous aider à l’améliorer afin qu’il puisse répondre à vos besoins.  Veuillez noter :  
+Apertus a été utilisé ici pour tous vous aider à accéder rapidement aux informations de Polylex et à les traiter comme vous le souhaitez. Nous vous encourageons à tester l'outil pour nous aider à l'améliorer afin qu'il puisse répondre à vos besoins.  Veuillez noter :  
 
-- Vos requêtes sont anonymes, nous ne gardons pas de trace de celles-ci, ni de vos interactions avec l’outil.  
+- Vous pouvez lui écrire dans la langue que vous souhaitez. Ceci est même encouragé !  
 
-- Vous pouvez lui écrire dans la langue que vous souhaitez. Ceci est même encouragé !  
+- L'outil possède des fonctionnalités de traitement de texte telles traduire, résumer, synthétiser, vulgariser, etc.  
 
-- L’outil possède des fonctionnalités de traitement de texte telles traduire, résumer, synthétiser, vulgariser, etc.  
+- L'outil reste limité à Polylex pour le moment. Il n'y a pas non plus d'accès au web.
 
-- L’outil reste limité à Polylex pour le moment. Il n’y a pas non plus d’accès au web 
+- Vous pouvez évaluer chaque réponse avec les boutons 👍 et 👎 pour nous aider à améliorer l'outil.
 
  
 
-Vos retours sont essentiels pour améliorer l’outil : envoyez vos impressions, et si pertinent, des captures d’écran ou exemples de prompts, à : feedback_Apertus@epfl.ch  
+Vos retours sont essentiels pour améliorer l'outil : envoyez vos impressions, et si pertinent, des captures d'écran ou exemples de prompts, à : feedback_Apertus@epfl.ch. 
+Vous pourrez retrouver cette adresse en cliquant sur le bouton "feedback" ✉️ sous les réponses de l'assistant.  
   `.trim(),
   BUTTON_TEXT: "J'ai compris"
 } as const;

@@ -207,12 +207,7 @@
 			);
 
 			// 3. Faire la recherche avec la bibliothèque sélectionnée
-			const data = await searchDocuments(
-				$user.token,
-				optimizedQuery,
-				libraryId,
-				undefined // Password optionnel
-			);
+			const data = await searchDocuments($user.token, optimizedQuery, libraryId, undefined);
 
 			// 4. Dismiss le toast de recherche
 			toast.dismiss(searchToastId);
@@ -226,6 +221,7 @@
 
 				// Mode expert : afficher le modal pour sélection manuelle
 				if (expertMode) {
+					// ✅ En mode expert, on garde generating = true jusqu'à ce que l'utilisateur confirme
 					showSearchResultsModal = true;
 				} else {
 					// ✅ Mode auto : Préparer les sources
@@ -248,9 +244,7 @@
 
 					console.log('📎 Adding sources:', autoSelectedDocs.length);
 
-					// ✅ SOLUTION 3 : Soumettre directement avec les sources
-					// Au lieu d'ajouter à files puis attendre tick() et espérer que ça marche,
-					// on ajoute les sources ET on soumet en une seule opération atomique
+					// ✅ Soumettre directement avec les sources
 					await submitPromptWithSources(query, autoSelectedDocs);
 
 					toast.success(
@@ -261,6 +255,8 @@
 				}
 			} else {
 				toast.info($i18n.t('No results found for RAG search.'));
+				// ✅ Pas de résultats, reset generating
+				messageInput?.resetGenerating();
 			}
 		} catch (error) {
 			console.error('RAG search error:', error);
@@ -270,6 +266,9 @@
 			}
 
 			toast.error($i18n.t('Error performing RAG search'));
+
+			// ✅ Réinitialiser generating en cas d'erreur
+			messageInput?.resetGenerating();
 		}
 	};
 
@@ -284,6 +283,7 @@
 		// Validation de base
 		if (!userPrompt?.trim() && sources.length === 0) {
 			toast.error($i18n.t('Please enter a prompt'));
+			messageInput?.resetGenerating(); // ✅ Reset si erreur
 			return false;
 		}
 
@@ -293,6 +293,7 @@
 		);
 		if (_selectedModels.includes('')) {
 			toast.error($i18n.t('Model not selected'));
+			messageInput?.resetGenerating(); // ✅ Reset si erreur
 			return false;
 		}
 
@@ -300,6 +301,7 @@
 		const messages = createMessagesList(history, history.currentId);
 		if (messages.length != 0 && messages.at(-1).done != true) {
 			toast.error($i18n.t('Please wait for the current response to complete'));
+			messageInput?.resetGenerating(); // ✅ Reset si erreur
 			return false;
 		}
 
@@ -317,10 +319,18 @@
 				actual: files.length
 			});
 			toast.error($i18n.t('Error adding sources. Please try again.'));
+			messageInput?.resetGenerating(); // ✅ Reset si erreur
 			return false;
 		}
 
 		try {
+			// ✅ IMPORTANT : Réinitialiser generating AVANT d'appeler submitPrompt
+			// submitPrompt va le gérer lui-même via dispatch('submit')
+			messageInput?.resetGenerating();
+			console.log('✅ Generating state reset before submitting prompt with sources in chat.svelte');
+
+			await tick(); // Laisser le temps au DOM de se mettre à jour
+
 			// ✅ Appeler submitPrompt normalement - elle va utiliser la variable files
 			await submitPrompt(userPrompt);
 			console.log('✅ Message submitted successfully with sources');
@@ -331,10 +341,10 @@
 
 			// En cas d'erreur, retirer les sources ajoutées
 			files = files.filter((f) => !sources.some((s) => s.id === f.id));
+			messageInput?.resetGenerating(); // ✅ Reset si erreur
 			return false;
 		}
 	};
-
 	// The handler for adding sources to files is already correct
 
 	let loading = true;
@@ -409,12 +419,18 @@
 
 		// ✅ Si on est en mode expert, soumettre automatiquement
 		if (isExpertModeSubmission && pendingRagQuery) {
+			// ✅ Reset generating AVANT de soumettre
+			messageInput?.resetGenerating();
+
 			await tick();
 			submitPrompt(pendingRagQuery);
 
 			// Reset les variables
 			pendingRagQuery = '';
 			isExpertModeSubmission = false;
+		} else {
+			// ✅ Pas de soumission automatique, reset generating
+			messageInput?.resetGenerating();
 		}
 	};
 
